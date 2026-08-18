@@ -10,6 +10,7 @@ from .cgv import CgvClient, Showtime
 from .config import Config, Target
 from .notifier import DiscordNotifier
 from .state import StateStore
+from . import paths
 
 logger = logging.getLogger("cgv_macro")
 
@@ -57,7 +58,7 @@ def run(config: Config, stop_event=None) -> None:
     notifier = DiscordNotifier(
         config.discord["webhook_url"], config.discord.get("mention", "")
     )
-    state = StateStore("./state.json")
+    state = StateStore(paths.state_path())
     err = config.errors
     interval = int(config.poll["interval_seconds"])
     jitter = int(config.poll["jitter_seconds"])

@@ -38,8 +38,10 @@ from tkinter import ttk, messagebox
 
 from cgv_macro.config import load_config, save_config_dict, load_raw, ConfigError
 from cgv_macro.logger import setup_logger
+from cgv_macro import paths
 
-CONFIG_PATH = "config.yaml"
+# 설정/상태/로그/세션은 실행 위치와 무관한 고정 폴더에 저장(재빌드해도 유지)
+CONFIG_PATH = paths.config_path()
 
 TARGET_COLS = ("name", "movie", "theater", "date", "time", "screen")
 
@@ -70,7 +72,7 @@ def build_config_dict(targets: list[dict], settings: dict) -> dict:
             "mention": settings["mention"],
         },
         "browser": {
-            "user_data_dir": "./session",
+            "user_data_dir": settings.get("session_dir", "./session"),
             "headless": settings["headless"],
             "slow_mo_ms": 0,
             "nav_timeout_ms": 30000,
@@ -81,7 +83,7 @@ def build_config_dict(targets: list[dict], settings: dict) -> dict:
             "alert_after_consecutive_failures": 5,
             "error_alert_cooldown_seconds": 900,
         },
-        "logging": {"dir": "./logs", "level": "INFO"},
+        "logging": {"dir": settings.get("logs_dir", "./logs"), "level": "INFO"},
     }
 
 
@@ -318,6 +320,8 @@ class App(tk.Tk):
             "webhook": self.v_webhook.get().strip(),
             "mention": self.v_mention.get().strip(),
             "headless": self.v_headless.get(),
+            "session_dir": paths.session_dir(),
+            "logs_dir": paths.logs_dir(),
         }
 
     def _save(self) -> bool:
@@ -374,7 +378,7 @@ class App(tk.Tk):
 
     # ---------- 로깅 ----------
     def _attach_logging(self) -> None:
-        logger = setup_logger("./logs", "INFO")
+        logger = setup_logger(paths.logs_dir(), "INFO")
         h = QueueLogHandler(self.log_q)
         h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S"))
         logger.addHandler(h)
@@ -400,7 +404,7 @@ class App(tk.Tk):
         from cgv_macro.cgv import run_login
         self.login_confirm.clear()
         result: dict = {}
-        br = {"user_data_dir": "./session"}
+        br = {"user_data_dir": paths.session_dir()}
         t = threading.Thread(target=run_login, args=(br, self.login_confirm, result), daemon=True)
         t.start()
         self._log("로그인 브라우저를 여는 중... 창에서 CGV 에 로그인하세요.")

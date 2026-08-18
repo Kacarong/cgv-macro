@@ -13,7 +13,9 @@ def main(argv: list[str] | None = None) -> int:
         prog="cgv_macro",
         description="CGV 상영 오픈/취소표 감지 + 디스코드 알림",
     )
-    parser.add_argument("--config", "-c", default="config.yaml", help="설정 파일 경로")
+    from .paths import config_path
+    parser.add_argument("--config", "-c", default=config_path(),
+                        help="설정 파일 경로(기본: 앱 데이터 폴더의 config.yaml)")
     parser.add_argument("--once", action="store_true",
                         help="1회만 폴링하고 종료(테스트용)")
     parser.add_argument("--check-login", action="store_true",
@@ -51,7 +53,8 @@ def main(argv: list[str] | None = None) -> int:
         from .state import StateStore
         from .monitor import _poll_once
         n = DiscordNotifier(config.discord["webhook_url"], config.discord.get("mention", ""))
-        st = StateStore("./state.json")
+        from .paths import state_path
+        st = StateStore(state_path())
         with CgvClient(config.browser) as c:
             _poll_once(c, config, st, n)
         st.save()
