@@ -65,6 +65,25 @@ class Booker:
             if self._pw:
                 self._pw.stop()
 
+    def _click_visible(self, selectors: list[str], timeout: int = 4000) -> bool:
+        """여러 셀렉터 후보 중 '실제로 보이는' 첫 요소를 클릭."""
+        for sel in selectors:
+            try:
+                loc = self.page.locator(sel)
+                cnt = loc.count()
+            except Exception:  # noqa: BLE001
+                continue
+            for i in range(min(cnt, 20)):
+                el = loc.nth(i)
+                try:
+                    if el.is_visible():
+                        el.scroll_into_view_if_needed(timeout=2000)
+                        el.click(timeout=timeout)
+                        return True
+                except Exception:  # noqa: BLE001
+                    continue
+        return False
+
     def _shot(self, name: str) -> None:
         try:
             self.page.screenshot(path=os.path.join(paths.data_dir(), f"grab_{name}.png"))
@@ -98,42 +117,28 @@ class Booker:
             p.goto(BOOK_URL, wait_until="domcontentloaded")
             p.wait_for_timeout(2500)
 
-            # 1) 영화 선택 — 검색창에 입력 후 포스터 클릭
+            # 1) 영화 선택 — 보이는 포스터/버튼만 클릭(검색 입력은 숨은 중복 유발하므로 생략)
             logger.info("[grab] 영화 선택: %s", movie)
-            try:
-                s = p.locator(SEL_MOVIE_SEARCH)
-                if s.count():
-                    s.first.click(); s.first.fill(movie); p.wait_for_timeout(1500)
-            except Exception:  # noqa: BLE001
-                pass
-            clicked = False
-            for sel in [f"img[alt='{movie}']", f"button:has-text('{movie}')",
-                        f"text={movie}"]:
-                loc = p.locator(sel)
-                if loc.count():
-                    loc.first.click(); clicked = True; break
-            if not clicked:
-                self._shot("movie"); return False, "", f"영화 '{movie}' 선택 실패"
+            if not self._click_visible([f"img[alt='{movie}']", f"img[alt*='{movie}']",
+                                        f"button:has-text('{movie}')", f"text={movie}"]):
+                self._shot("movie"); return False, "", f"영화 '{movie}' 선택 실패(포스터 안 보임)"
             p.wait_for_timeout(2000)
 
+            self._shot("1movie")
             # 2) 극장 선택 — 극장 추가(+) → 지점 클릭 → 극장선택
             logger.info("[grab] 극장 선택: %s", theater)
-            for sel in ["button[class*='btn-icon']:near(:text('극장'))",
-                        "button:has-text('극장')", "[class*='addTheater']", "button.btn-icon"]:
-                try:
-                    loc = p.locator(sel)
-                    if loc.count():
-                        loc.first.click(); p.wait_for_timeout(1200); break
-                except Exception:  # noqa: BLE001
-                    continue
-            # 지점명 클릭
-            th = p.locator(f"text={theater}")
-            if th.count():
-                th.first.click(); p.wait_for_timeout(800)
-            # 극장선택 확정
-            tc = p.locator(SEL_THEATER_CONFIRM)
-            if tc.count():
-                tc.first.click(); p.wait_for_timeout(2000)
+            # 지점이 이미 안 보이면 극장 추가(+) 열기
+            if not p.locator(f"text={theater}").count():
+                self._click_visible(["button:has-text('극장선택')", "[class*='btn-icon']",
+                                     "button.btn-icon"])
+                p.wait_for_timeout(1200)
+            # 지점명 클릭(보이는 것)
+            self._click_visible([f"text={theater}"])
+            p.wait_for_timeout(800)
+            # 극장선택 확정 버튼(있으면)
+            self._click_visible([SEL_THEATER_CONFIRM])
+            p.wait_for_timeout(2000)
+            self._shot("2theater")
 
             # 3) 날짜 선택
             logger.info("[grab] 날짜 선택: %s일", day_num)
@@ -154,8 +159,13 @@ class Booker:
                         continue
                     target_btn = el; break
             if target_btn is None:
-                self._shot("schedule"); return False, "", f"회차 {hhmm} 을(를) 못 찾음(매진/미오픈?)"
+                self._shot("3schedule"); return False, "", f"회차 {hhmm} 을(를) 못 찾음(매진/미오픈?)"
+            try:
+                target_btn.scroll_into_view_if_needed(timeout=2000)
+            except Exception:  # noqa: BLE001
+                pass
             target_btn.click(); p.wait_for_timeout(2500)
+            self._shot("3schedule")
 
             # (로그인 안됐으면 로그인 페이지로 감)
             if "login" in p.url:
@@ -166,6 +176,7 @@ class Booker:
             nums = p.locator(SEL_PERSON_NUM)
             if nums.count() >= count:
                 nums.nth(count - 1).click(); p.wait_for_timeout(2000)
+            self._shot("4person")
 
             # 6) 좌석 선택
             seats = p.locator(SEL_SEAT_AVAILABLE)
