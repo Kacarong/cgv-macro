@@ -221,7 +221,10 @@ class CgvClient:
 
         def on_response(resp):
             try:
-                if S.API_HOST in resp.url and "json" in (resp.headers.get("content-type", "")):
+                url = resp.url
+                # 인증 API(api.cgv.co.kr) + 같은도메인 프록시(/api/v1/booking) 응답 모두 캡처
+                if (S.API_HOST in url or S.API_PROXY in url) and \
+                        "json" in (resp.headers.get("content-type", "")):
                     captured.append(resp.json())
             except Exception:  # noqa: BLE001
                 pass
