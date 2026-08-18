@@ -31,14 +31,24 @@ class DiscordNotifier:
         req = urllib.request.Request(
             self.webhook_url,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                # 디스코드/Cloudflare 는 기본 'Python-urllib' UA 를 403 으로 차단하므로
+                # 반드시 정상적인 User-Agent 를 붙인다.
+                "User-Agent": "cgv-macro/0.1 (+https://github.com/) DiscordWebhook",
+            },
             method="POST",
         )
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return 200 <= resp.status < 300
         except urllib.error.HTTPError as e:
-            logger.error("디스코드 전송 실패(HTTP %s): %s", e.code, e.reason)
+            body = ""
+            try:
+                body = e.read().decode("utf-8", "replace")[:200]
+            except Exception:  # noqa: BLE001
+                pass
+            logger.error("디스코드 전송 실패(HTTP %s): %s %s", e.code, e.reason, body)
         except Exception as e:  # noqa: BLE001
             logger.error("디스코드 전송 실패: %s", e)
         return False
