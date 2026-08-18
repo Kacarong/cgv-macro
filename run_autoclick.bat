@@ -23,5 +23,8 @@ if not exist ".venv\" (
 )
 
 echo [run] starting auto-click (Ctrl+C to stop)...
-python auto_click.py --count 2 --prefer center
+echo [run] log is also saved to last_run.txt
+python auto_click.py --count 2 --prefer center 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath '%~dp0last_run.txt'"
+echo.
+echo ===== finished. If something went wrong, send last_run.txt =====
 pause
