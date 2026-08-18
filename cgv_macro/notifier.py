@@ -20,11 +20,33 @@ _COLOR = {
 }
 
 
+def _normalize_mention(m: str) -> str:
+    """숫자ID/@ID 를 디스코드 핑 형식 <@ID> 로 정규화. @everyone/@here/<@...>는 그대로."""
+    m = (m or "").strip()
+    if not m:
+        return ""
+    if m in ("@everyone", "@here"):
+        return m
+    if m.startswith("<@") and m.endswith(">"):
+        return m
+    digits = m.lstrip("@").strip("<>@!&")
+    if digits.isdigit():
+        return f"<@{digits}>"
+    return m
+
+
 class DiscordNotifier:
     def __init__(self, webhook_url: str, mention: str = "") -> None:
         self.webhook_url = webhook_url
-        self.mention = mention or ""
+        self.mention = _normalize_mention(mention)
         self._last_error_ts = 0.0
+
+    def _payload_with_mention(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self.mention:
+            payload["content"] = self.mention
+            # 웹훅이 유저/전체 멘션을 실제로 핑하도록 허용
+            payload["allowed_mentions"] = {"parse": ["users", "everyone"]}
+        return payload
 
     def _post(self, payload: dict[str, Any]) -> bool:
         data = json.dumps(payload).encode("utf-8")
@@ -98,17 +120,13 @@ class DiscordNotifier:
             )
 
         payload: dict[str, Any] = {"embeds": [embed]}
-        if self.mention:
-            payload["content"] = self.mention
-        return self._post(payload)
+        return self._post(self._payload_with_mention(payload))
 
     def notify_info(self, title: str, message: str) -> bool:
         """일반 정보 알림(감시 시작 요약 등)."""
         embed = {"title": title, "description": message[:1900], "color": 0x95A5A6}
         payload: dict[str, Any] = {"embeds": [embed]}
-        if self.mention:
-            payload["content"] = self.mention
-        return self._post(payload)
+        return self._post(self._payload_with_mention(payload))
 
     def notify_error(self, message: str, cooldown_seconds: int = 900) -> bool:
         """에러 알림. cooldown 내 반복 호출은 억제(도배 방지)."""
@@ -123,6 +141,4 @@ class DiscordNotifier:
             "color": _COLOR["error"],
         }
         payload: dict[str, Any] = {"embeds": [embed]}
-        if self.mention:
-            payload["content"] = self.mention
-        return self._post(payload)
+        return self._post(self._payload_with_mention(payload))
