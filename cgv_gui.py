@@ -107,8 +107,8 @@ class TargetDialog(tk.Toplevel):
         ("theater", "극장명", ""),
         ("theater_code", "극장코드(선택)", ""),
         ("date", "날짜(YYYY-MM-DD)", ""),
-        ("time_from", "시작시간(HH:MM)", "18:00"),
-        ("time_to", "종료시간(HH:MM)", "23:59"),
+        ("time_from", "시작시간(HH:MM, 비우면 하루전체)", "00:00"),
+        ("time_to", "종료시간(HH:MM, 비우면 하루전체)", "23:59"),
         ("screen_type", "상영관필터(선택)", ""),
         ("booking_url", "예매URL(선택, 가장 확실)", ""),
     ]
@@ -144,6 +144,11 @@ class TargetDialog(tk.Toplevel):
             return
         if not d["name"]:
             d["name"] = d["movie"] or d["movie_code"]
+        # 시간대 비우면 하루 전체로
+        if not d["time_from"]:
+            d["time_from"] = "00:00"
+        if not d["time_to"]:
+            d["time_to"] = "23:59"
         self.result = d
         self.destroy()
 
