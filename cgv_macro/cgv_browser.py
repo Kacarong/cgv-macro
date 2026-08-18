@@ -129,46 +129,56 @@ class Booker:
             #    (상단 X 닫기 버튼과 혼동 금지). 모달이 실제 열렸는지 검증.
             logger.info("[grab] 극장 선택: %s (지역 %s)", theater, region or "?")
 
-            logger.info("[grab] theater-open v3")
+            logger.info("[grab] theater-open v4")
 
-            def _theater_modal_open() -> bool:
-                return (p.locator("text=지역별").count() > 0
-                        or p.locator("input[placeholder*='지역']").count() > 0
-                        or p.locator("text=극장선택").count() > 0)
+            def _modal_open() -> bool:
+                return (p.locator("input[placeholder*='지역']").count() > 0
+                        or p.locator("text=지역별").count() > 0)
 
-            # JS로 '선택 된 극장이 없습니다' 줄의 가장 오른쪽 버튼(=+ 극장추가)만 클릭
+            # '선택 된 극장이 없습니다' 줄의 가장 오른쪽 버튼(=+ 극장추가) 클릭
             open_js = r"""() => {
               const all=[...document.querySelectorAll('*')];
               const label=all.find(e=>e.children.length===0 && e.textContent &&
                     e.textContent.trim().includes('선택 된 극장'));
               if(!label) return 'no-label';
               let node=label.parentElement, cands=[];
-              for(let up=0; up<5 && node; up++, node=node.parentElement){
-                cands=[...node.querySelectorAll('button,[role=button],a')];
+              for(let up=0; up<6 && node; up++, node=node.parentElement){
+                cands=[...node.querySelectorAll('button,[role=button],a,svg,i,span')]
+                       .filter(x=>x.offsetParent!==null);
                 if(cands.length) break;
               }
               if(!cands.length) return 'no-button';
               const best=cands.reduce((a,b)=>
                  a.getBoundingClientRect().left>=b.getBoundingClientRect().left?a:b);
               best.click();
-              return 'clicked';
+              return 'clicked@'+Math.round(best.getBoundingClientRect().left);
             }"""
-            opened = _theater_modal_open()
-            if not opened:
+            # 방법1: JS로 오른쪽 버튼 클릭
+            if not _modal_open():
                 try:
                     res = p.evaluate(open_js)
                 except Exception as e:  # noqa: BLE001
                     res = f"err:{e}"
-                logger.info("[grab] 극장추가 클릭: %s", res)
-                p.wait_for_timeout(1500)
-                opened = _theater_modal_open()
-                logger.info("[grab] 극장 모달 열림=%s", opened)
-            if not opened:
-                self._shot("2theater"); return False, "", "극장 추가(+) 모달 열기 실패"
+                logger.info("[grab] 극장추가 JS클릭: %s", res)
+                p.wait_for_timeout(1600)
+            # 방법2: 그래도 안 열리면 라벨 오른쪽 좌표를 직접 클릭
+            if not _modal_open():
+                try:
+                    lbl = p.get_by_text("선택 된 극장", exact=False).first
+                    box = lbl.bounding_box()
+                    if box:
+                        x = box["x"] + 530; y = box["y"] + box["height"] / 2
+                        p.mouse.click(x, y)
+                        logger.info("[grab] 극장추가 좌표클릭 @%.0f,%.0f", x, y)
+                        p.wait_for_timeout(1600)
+                except Exception as e:  # noqa: BLE001
+                    logger.info("[grab] 좌표클릭 실패: %s", e)
             self._shot("2a_modalopen")
-            logger.info("[grab] 모달내 지역'%s' 후보=%d, 지점'%s' 후보=%d",
-                        region, p.locator(f"text={region}").count(),
+            logger.info("[grab] 모달열림=%s 지역'%s'후보=%d 지점'%s'후보=%d",
+                        _modal_open(), region, p.locator(f"text={region}").count(),
                         theater, p.locator(f"text={theater}").count())
+            if not _modal_open():
+                self._shot("2theater"); return False, "", "극장 추가(+) 모달 열기 실패"
 
             # 지역 먼저 선택(모달 왼쪽)
             if region:
