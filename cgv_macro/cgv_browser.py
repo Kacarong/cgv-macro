@@ -125,17 +125,34 @@ class Booker:
             p.wait_for_timeout(2000)
 
             self._shot("1movie")
-            # 2) 극장 선택 — 극장 추가 모달 열기 → 지역 → 지점 → 극장선택(확정)
+            # 2) 극장 선택 — '선택 된 극장이 없습니다' 옆의 +(극장 추가)만 정확히 클릭
+            #    (상단 X 닫기 버튼과 혼동 금지). 모달이 실제 열렸는지 검증.
             logger.info("[grab] 극장 선택: %s (지역 %s)", theater, region or "?")
-            # 극장 추가 모달 열기(+). 이미 모달/지점 텍스트가 없으면 연다.
-            self._click_visible(["[class*='btn-icon']", "button.btn-icon",
-                                 "button:has-text('극장')"])
-            p.wait_for_timeout(1200)
+
+            def _theater_modal_open() -> bool:
+                return (p.locator("text=지역별").count() > 0
+                        or p.locator("input[placeholder*='지역']").count() > 0
+                        or p.locator(f"text={region}").count() > 0)
+
+            opened = _theater_modal_open()
+            if not opened:
+                for sel in [
+                    "xpath=//*[contains(text(),'극장이 없습니다')]/following::button[1]",
+                    "xpath=//*[contains(text(),'선택 된 극장')]/following::button[1]",
+                    "xpath=//*[contains(text(),'극장이 없습니다')]/following::*[self::button or @role='button'][1]",
+                ]:
+                    if self._click_visible([sel]):
+                        p.wait_for_timeout(1200)
+                        if _theater_modal_open():
+                            opened = True; break
+            if not opened:
+                self._shot("2theater"); return False, "", "극장 추가(+) 버튼을 못 찾음"
+
             # 지역 먼저 선택(모달 왼쪽)
             if region:
                 self._click_visible([f"text={region}", f":has-text('{region}')"])
                 p.wait_for_timeout(900)
-            # 지점 선택(보이는 것)
+            # 지점 선택
             if not self._click_visible([f"text={theater}"]):
                 self._shot("2theater")
                 return False, "", f"극장 '{theater}' 선택 실패(지역 모달 확인 필요)"
@@ -143,7 +160,6 @@ class Booker:
             # 극장선택 확정
             self._click_visible(["text=극장선택", "button:has-text('극장선택')",
                                  ":has-text('극장선택')"])
-            # 바텀 모달이 닫힐 때까지 대기(안 닫히면 뒤 클릭이 막힘)
             for _ in range(10):
                 if p.locator(".cgv-bot-modal.active, .modal-bg").count() == 0:
                     break
