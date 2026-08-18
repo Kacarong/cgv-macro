@@ -129,7 +129,7 @@ class Booker:
             #    (상단 X 닫기 버튼과 혼동 금지). 모달이 실제 열렸는지 검증.
             logger.info("[grab] 극장 선택: %s (지역 %s)", theater, region or "?")
 
-            logger.info("[grab] theater-open v6")
+            logger.info("[grab] theater-open v7")
 
             def _visible(sel: str) -> bool:
                 loc = p.locator(sel)
@@ -142,41 +142,48 @@ class Booker:
                 return False
 
             def _modal_open() -> bool:
-                # 숨겨진(미리 렌더된) 모달을 오탐하지 않도록 '보이는지'까지 확인
                 return (_visible("input[placeholder*='지역']")
                         or _visible("text=지역별"))
 
-            # '선택 된 극장이 없습니다' 줄의 오른쪽(⊕ 위치)을 훑어 클릭 가능한 요소를 클릭
-            open_js = r"""() => {
+            # 라벨과 같은 줄, 오른쪽의 '아이콘 크기' 요소 중 가장 오른쪽(=⊕)의 좌표를 반환
+            find_js = r"""() => {
               const all=[...document.querySelectorAll('*')];
               const label=all.find(e=>e.children.length===0 && e.textContent &&
                     e.textContent.trim().includes('선택 된 극장'));
-              if(!label) return 'no-label';
+              if(!label) return null;
               const lr=label.getBoundingClientRect();
-              const y=lr.top+lr.height/2;
-              const xStart=Math.min(window.innerWidth-30, lr.left+640);
-              for(let x=xStart; x>lr.right; x-=5){
-                const el=document.elementFromPoint(x,y);
-                if(!el) continue;
-                let n=el;
-                for(let k=0;k<5 && n;k++,n=n.parentElement){
-                  const cs=getComputedStyle(n);
-                  if(n.tagName==='BUTTON'||n.getAttribute('role')==='button'||cs.cursor==='pointer'){
-                    n.click();
-                    return 'clicked@'+Math.round(x)+','+Math.round(y)+' <'+n.tagName+'>';
-                  }
+              const cyL=lr.top+lr.height/2;
+              let best=null,bestX=-1;
+              for(const el of all){
+                const r=el.getBoundingClientRect();
+                if(r.width===0||r.height===0||r.width>90||r.height>90) continue;
+                const cy=r.top+r.height/2;
+                if(Math.abs(cy-cyL)<26 && r.left>lr.right+30 && r.left<lr.right+760){
+                  if(r.left>bestX){best=el;bestX=r.left;}
                 }
               }
-              return 'no-plus';
+              if(!best) return null;
+              const r=best.getBoundingClientRect();
+              const cn=(typeof best.className==='string')?best.className:'';
+              return {x:Math.round(r.left+r.width/2), y:Math.round(r.top+r.height/2),
+                      info:best.tagName+'.'+cn};
             }"""
-            for attempt in range(2):
+            for attempt in range(3):
                 if _modal_open():
                     break
                 try:
-                    res = p.evaluate(open_js)
+                    c = p.evaluate(find_js)
                 except Exception as e:  # noqa: BLE001
-                    res = f"err:{e}"
-                logger.info("[grab] 극장추가 스캔클릭#%d: %s", attempt + 1, res)
+                    c = None
+                    logger.info("[grab] find_js 오류: %s", e)
+                if c:
+                    logger.info("[grab] 극장추가 아이콘@%s,%s %s", c["x"], c["y"], str(c["info"])[:50])
+                    try:
+                        p.mouse.click(c["x"], c["y"])
+                    except Exception as e:  # noqa: BLE001
+                        logger.info("[grab] 마우스클릭 오류: %s", e)
+                else:
+                    logger.info("[grab] 극장추가 아이콘 못 찾음#%d", attempt + 1)
                 p.wait_for_timeout(1800)
             self._shot("2a_modalopen")
             logger.info("[grab] 모달열림=%s 지역'%s'후보=%d 지점'%s'후보=%d",
