@@ -26,10 +26,10 @@ CGV 는 개편으로 `https://cgv.co.kr`(Next.js SPA) + `https://api.cgv.co.kr`(
 빌드(최초 1회, Windows):
 1. [Python 3.10+](https://www.python.org/downloads/) 설치(설치 시 "Add Python to PATH" 체크).
 2. 이 폴더의 **`build_exe.bat` 더블클릭** → 의존성 설치 + Chromium 다운로드 + exe 빌드까지 자동.
-3. 결과물: `dist\CGV취소표감시기\CGV취소표감시기.exe`  (이 폴더 전체를 복사해 사용)
+3. 결과물: `dist\CGV-Ticket-Watcher\CGV-Ticket-Watcher.exe`  (이 폴더 전체를 복사해 사용)
 
 사용:
-1. `CGV취소표감시기.exe` 실행.
+1. `CGV-Ticket-Watcher.exe` 실행.
 2. "감시 대상" 에서 **추가** → 영화/극장/날짜/시간대 입력.
 3. 폴링 주기·알림 옵션·좌석 자동선택·**디스코드 웹훅 URL** 입력 후 **설정 저장**.
 4. **CGV 로그인** 클릭 → 열린 브라우저에서 로그인 → 창의 "로그인 완료" 클릭.

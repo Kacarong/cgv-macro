@@ -32,7 +32,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='CGV취소표감시기',
+    name='CGV-Ticket-Watcher',
     debug=False,
     strip=False,
     upx=False,
@@ -45,5 +45,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name='CGV취소표감시기',
+    name='CGV-Ticket-Watcher',
 )
