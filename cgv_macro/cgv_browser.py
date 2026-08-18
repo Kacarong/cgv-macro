@@ -119,19 +119,44 @@ class Booker:
             p.goto("https://cgv.co.kr/cnm/movieBook/cinema", wait_until="domcontentloaded")
             p.wait_for_timeout(3000)
 
-            # 1) 지역 선택 (예: '부산/울산(18)')
-            if region:
-                rb = p.locator(f"button:has-text('{region}')")
-                if rb.count():
-                    rb.first.click(); p.wait_for_timeout(1500)
-                else:
-                    logger.info("[grab] 지역 버튼 '%s' 못 찾음(계속)", region)
+            logger.info("[grab] region/theater v10")
+            # 지역 목록이 준비될 때까지 대기
+            for _ in range(10):
+                if (p.locator(f"text={region}").count() if region else 0) \
+                        or p.locator("text=지역별").count():
+                    break
+                p.wait_for_timeout(600)
 
-            # 2) 극장 선택 (예: '센텀시티')
-            tb = p.locator(f"button:has-text('{theater}')")
-            if not tb.count():
-                self._shot("2theater"); return False, "", f"극장 '{theater}' 버튼 못 찾음"
-            tb.first.click(); p.wait_for_timeout(2500)
+            # 1) 지역 선택 (예: '부산/울산') — 버튼 아닌 요소일 수 있어 보이는 텍스트로 클릭
+            if region:
+                if self._click_visible([f"text={region}"]):
+                    logger.info("[grab] 지역 클릭: %s", region)
+                else:
+                    logger.info("[grab] 지역 '%s' 못 찾음(계속)", region)
+                p.wait_for_timeout(1800)
+
+            # 2) 극장 선택 (예: '센텀시티') — 지역 클릭 후 나타남. 몇 번 재시도.
+            ok_t = False
+            for _ in range(6):
+                if self._click_visible([f"text={theater}"]):
+                    ok_t = True; break
+                p.wait_for_timeout(700)
+            # 폴백: 검색창에 극장명 입력 후 클릭
+            if not ok_t:
+                si = p.locator("input[placeholder*='극장'], input[placeholder*='지역']")
+                if si.count():
+                    try:
+                        si.first.click(); si.first.fill(theater); p.wait_for_timeout(1200)
+                        ok_t = self._click_visible([f"text={theater}"])
+                    except Exception:  # noqa: BLE001
+                        pass
+            if not ok_t:
+                self._shot("2theater"); return False, "", f"극장 '{theater}' 못 찾음"
+            logger.info("[grab] 극장 클릭: %s", theater)
+            p.wait_for_timeout(800)
+            # 극장선택 확정 버튼이 있으면 눌러 모달 닫기(없으면 무시)
+            self._click_visible(["text=극장선택", "button:has-text('극장선택')"])
+            p.wait_for_timeout(2500)
             self._shot("2theater")
 
             # 3) 날짜 선택 (dayScroll)
