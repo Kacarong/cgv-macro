@@ -129,11 +129,22 @@ class Booker:
             #    (상단 X 닫기 버튼과 혼동 금지). 모달이 실제 열렸는지 검증.
             logger.info("[grab] 극장 선택: %s (지역 %s)", theater, region or "?")
 
-            logger.info("[grab] theater-open v5")
+            logger.info("[grab] theater-open v6")
+
+            def _visible(sel: str) -> bool:
+                loc = p.locator(sel)
+                for i in range(min(loc.count(), 5)):
+                    try:
+                        if loc.nth(i).is_visible():
+                            return True
+                    except Exception:  # noqa: BLE001
+                        pass
+                return False
 
             def _modal_open() -> bool:
-                return (p.locator("input[placeholder*='지역']").count() > 0
-                        or p.locator("text=지역별").count() > 0)
+                # 숨겨진(미리 렌더된) 모달을 오탐하지 않도록 '보이는지'까지 확인
+                return (_visible("input[placeholder*='지역']")
+                        or _visible("text=지역별"))
 
             # '선택 된 극장이 없습니다' 줄의 오른쪽(⊕ 위치)을 훑어 클릭 가능한 요소를 클릭
             open_js = r"""() => {
