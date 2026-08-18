@@ -129,24 +129,42 @@ class Booker:
             #    (상단 X 닫기 버튼과 혼동 금지). 모달이 실제 열렸는지 검증.
             logger.info("[grab] 극장 선택: %s (지역 %s)", theater, region or "?")
 
+            logger.info("[grab] theater-open v3")
+
             def _theater_modal_open() -> bool:
                 return (p.locator("text=지역별").count() > 0
                         or p.locator("input[placeholder*='지역']").count() > 0
-                        or p.locator(f"text={region}").count() > 0)
+                        or p.locator("text=극장선택").count() > 0)
 
+            # JS로 '선택 된 극장이 없습니다' 줄의 가장 오른쪽 버튼(=+ 극장추가)만 클릭
+            open_js = r"""() => {
+              const all=[...document.querySelectorAll('*')];
+              const label=all.find(e=>e.children.length===0 && e.textContent &&
+                    e.textContent.trim().includes('선택 된 극장'));
+              if(!label) return 'no-label';
+              let node=label.parentElement, cands=[];
+              for(let up=0; up<5 && node; up++, node=node.parentElement){
+                cands=[...node.querySelectorAll('button,[role=button],a')];
+                if(cands.length) break;
+              }
+              if(!cands.length) return 'no-button';
+              const best=cands.reduce((a,b)=>
+                 a.getBoundingClientRect().left>=b.getBoundingClientRect().left?a:b);
+              best.click();
+              return 'clicked';
+            }"""
             opened = _theater_modal_open()
             if not opened:
-                for sel in [
-                    "xpath=//*[contains(text(),'극장이 없습니다')]/following::button[1]",
-                    "xpath=//*[contains(text(),'선택 된 극장')]/following::button[1]",
-                    "xpath=//*[contains(text(),'극장이 없습니다')]/following::*[self::button or @role='button'][1]",
-                ]:
-                    if self._click_visible([sel]):
-                        p.wait_for_timeout(1200)
-                        if _theater_modal_open():
-                            opened = True; break
+                try:
+                    res = p.evaluate(open_js)
+                except Exception as e:  # noqa: BLE001
+                    res = f"err:{e}"
+                logger.info("[grab] 극장추가 클릭: %s", res)
+                p.wait_for_timeout(1500)
+                opened = _theater_modal_open()
+                logger.info("[grab] 극장 모달 열림=%s", opened)
             if not opened:
-                self._shot("2theater"); return False, "", "극장 추가(+) 버튼을 못 찾음"
+                self._shot("2theater"); return False, "", "극장 추가(+) 모달 열기 실패"
 
             # 지역 먼저 선택(모달 왼쪽)
             if region:
