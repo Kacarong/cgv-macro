@@ -113,135 +113,59 @@ class Booker:
             day_num = day
 
         try:
-            logger.info("[grab] 예매 페이지 이동")
-            p.goto(BOOK_URL, wait_until="domcontentloaded")
-            p.wait_for_timeout(2500)
+            logger.info("[grab] cinema-flow v9 — %s / %s / %s일 / %s (지역 %s)",
+                        movie, theater, day_num, hhmm, region or "?")
+            # 극장별 예매 전용 페이지(팝업 없이 지역·극장·날짜·회차가 보이는 버튼)
+            p.goto("https://cgv.co.kr/cnm/movieBook/cinema", wait_until="domcontentloaded")
+            p.wait_for_timeout(3000)
 
-            # 1) 영화 선택 — 보이는 포스터/버튼만 클릭(검색 입력은 숨은 중복 유발하므로 생략)
-            logger.info("[grab] 영화 선택: %s", movie)
-            if not self._click_visible([f"img[alt='{movie}']", f"img[alt*='{movie}']",
-                                        f"button:has-text('{movie}')", f"text={movie}"]):
-                self._shot("movie"); return False, "", f"영화 '{movie}' 선택 실패(포스터 안 보임)"
-            p.wait_for_timeout(2000)
-
-            self._shot("1movie")
-            # 2) 극장 선택 — '선택 된 극장이 없습니다' 옆의 +(극장 추가)만 정확히 클릭
-            #    (상단 X 닫기 버튼과 혼동 금지). 모달이 실제 열렸는지 검증.
-            logger.info("[grab] 극장 선택: %s (지역 %s)", theater, region or "?")
-
-            logger.info("[grab] theater-open v8")
-
-            def _visible(sel: str) -> bool:
-                loc = p.locator(sel)
-                for i in range(min(loc.count(), 5)):
-                    try:
-                        if loc.nth(i).is_visible():
-                            return True
-                    except Exception:  # noqa: BLE001
-                        pass
-                return False
-
-            def _modal_open() -> bool:
-                return (_visible("input[placeholder*='지역']")
-                        or _visible("text=지역별"))
-
-            # '실제로 보이는' 라벨의 위치만 반환(숨은 복제본 무시)
-            find_label_js = r"""() => {
-              const all=[...document.querySelectorAll('*')];
-              const cand=all.filter(e=>e.children.length===0 && e.textContent &&
-                    e.textContent.trim().includes('선택 된 극장'));
-              const vis=cand.find(e=>{const r=e.getBoundingClientRect();
-                    return r.width>0 && r.height>0 && e.offsetParent!==null;});
-              if(!vis) return null;
-              const r=vis.getBoundingClientRect();
-              return {left:Math.round(r.left), right:Math.round(r.right),
-                      y:Math.round(r.top+r.height/2)};
-            }"""
-            c = None
-            try:
-                c = p.evaluate(find_label_js)
-            except Exception as e:  # noqa: BLE001
-                logger.info("[grab] 라벨탐색 오류: %s", e)
-            if not c:
-                self._shot("2theater"); return False, "", "극장 라벨(보이는 것)을 못 찾음"
-            logger.info("[grab] 보이는 라벨 left=%d right=%d y=%d", c["left"], c["right"], c["y"])
-
-            # 라벨 오른쪽(⊕ 예상 위치)을 여러 지점 실제 마우스로 클릭하며 모달 열릴 때까지 시도
-            y = c["y"]
-            offsets = [430, 400, 460, 380, 500, 350, 540, 300, 250, 200, 150, 100, 60]
-            xs = []
-            for off in offsets:
-                x = c["right"] + off
-                if x not in xs and x < 1420:
-                    xs.append(x)
-            opened_x = None
-            for x in xs:
-                if _modal_open():
-                    break
-                try:
-                    p.mouse.click(x, y)
-                except Exception:  # noqa: BLE001
-                    continue
-                p.wait_for_timeout(650)
-                if _modal_open():
-                    opened_x = x; break
-            logger.info("[grab] 극장추가 클릭 결과: 열림=%s (x=%s)", _modal_open(), opened_x)
-            self._shot("2a_modalopen")
-            logger.info("[grab] 모달열림=%s 지역'%s'후보=%d 지점'%s'후보=%d",
-                        _modal_open(), region, p.locator(f"text={region}").count(),
-                        theater, p.locator(f"text={theater}").count())
-            if not _modal_open():
-                self._shot("2theater"); return False, "", "극장 추가(+) 모달 열기 실패"
-
-            # 지역 먼저 선택(모달 왼쪽)
+            # 1) 지역 선택 (예: '부산/울산(18)')
             if region:
-                self._click_visible([f"text={region}", f":has-text('{region}')"])
-                p.wait_for_timeout(1500)
-            self._shot("2b_region")
-            logger.info("[grab] 지역선택 후 지점'%s' 후보=%d", theater,
-                        p.locator(f"text={theater}").count())
-            # 지점 선택
-            if not self._click_visible([f"text={theater}"]):
-                self._shot("2theater")
-                return False, "", f"극장 '{theater}' 선택 실패(지역 모달 확인 필요)"
-            p.wait_for_timeout(700)
-            self._shot("2c_site")
-            # 극장선택 확정
-            self._click_visible(["text=극장선택", "button:has-text('극장선택')",
-                                 ":has-text('극장선택')"])
-            for _ in range(10):
-                if p.locator(".cgv-bot-modal.active, .modal-bg").count() == 0:
-                    break
-                p.wait_for_timeout(500)
-            p.wait_for_timeout(1000)
+                rb = p.locator(f"button:has-text('{region}')")
+                if rb.count():
+                    rb.first.click(); p.wait_for_timeout(1500)
+                else:
+                    logger.info("[grab] 지역 버튼 '%s' 못 찾음(계속)", region)
+
+            # 2) 극장 선택 (예: '센텀시티')
+            tb = p.locator(f"button:has-text('{theater}')")
+            if not tb.count():
+                self._shot("2theater"); return False, "", f"극장 '{theater}' 버튼 못 찾음"
+            tb.first.click(); p.wait_for_timeout(2500)
             self._shot("2theater")
 
-            # 3) 날짜 선택
+            # 3) 날짜 선택 (dayScroll)
             logger.info("[grab] 날짜 선택: %s일", day_num)
             days = p.locator(SEL_DAY_ITEM, has_text=day_num)
             if days.count():
-                days.first.click(); p.wait_for_timeout(1500)
+                days.first.click(); p.wait_for_timeout(2500)
+            self._shot("3date")
 
-            # 4) 회차(시간) 선택 — 예매종료/준비중 제외, 시작시각 매칭
-            logger.info("[grab] 회차 선택: %s", hhmm)
-            shows = p.locator(SEL_SCHEDULE_BTN)
-            n = shows.count()
-            target_btn = None
-            for i in range(n):
-                el = shows.nth(i)
-                txt = (el.inner_text() or "")
-                if hhmm in txt and "예매종료" not in txt and "준비" not in txt:
-                    if screen_type and screen_type.lower() not in txt.lower():
-                        continue
-                    target_btn = el; break
-            if target_btn is None:
-                self._shot("3schedule"); return False, "", f"회차 {hhmm} 을(를) 못 찾음(매진/미오픈?)"
-            try:
-                target_btn.scroll_into_view_if_needed(timeout=2000)
-            except Exception:  # noqa: BLE001
-                pass
-            target_btn.click(); p.wait_for_timeout(2500)
-            self._shot("3schedule")
+            # 4) 회차 선택 — 영화 아코디언(movie) 아래 hhmm 회차를 표식 후 클릭
+            logger.info("[grab] 회차 선택: %s (%s)", hhmm, movie)
+            mark_js = r"""(a)=>{const {hhmm,movie}=a;
+              const T=[...document.querySelectorAll("[class*='accordionTitle']")];
+              const L=[...document.querySelectorAll("[class*='screenInfo_timeLink']")];
+              const pt=e=>{let b=null;for(const t of T){
+                  if(t.compareDocumentPosition(e)&Node.DOCUMENT_POSITION_FOLLOWING)b=t;}return b;};
+              for(const lk of L){const x=lk.textContent||"";
+                if(x.includes(hhmm)&&!x.includes('예매종료')&&!x.includes('준비')){
+                  const t=pt(lk);
+                  if(t&&t.textContent.includes(movie)){lk.setAttribute('data-ap','1');
+                    return 'ok:'+x.replace(/\s/g,' ').slice(0,26);}}}
+              return 'nf';}"""
+            expand_js = r"""(m)=>{const ts=[...document.querySelectorAll("[class*='accordionTitle']")];
+              const t=ts.find(e=>e.textContent.includes(m));if(t){t.click();return 'ok';}return 'no';}"""
+            res = p.evaluate(mark_js, {"hhmm": hhmm, "movie": movie})
+            if res == "nf":
+                p.evaluate(expand_js, movie); p.wait_for_timeout(1200)
+                res = p.evaluate(mark_js, {"hhmm": hhmm, "movie": movie})
+            logger.info("[grab] 회차 표식: %s", res)
+            if not str(res).startswith("ok"):
+                self._shot("4schedule"); return False, "", f"회차 {hhmm}({movie}) 못 찾음(매진/미오픈?)"
+            p.locator("[data-ap='1']").first.click(timeout=6000)
+            p.wait_for_timeout(3000)
+            self._shot("4schedule")
 
             # (로그인 안됐으면 로그인 페이지로 감)
             if "login" in p.url:
