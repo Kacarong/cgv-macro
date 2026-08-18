@@ -100,7 +100,7 @@ class Booker:
 
     def grab(self, movie: str, theater: str, day: str, hhmm: str,
              count: int = 2, prefer: str = "center", preferred: list[str] | None = None,
-             screen_type: str = "") -> tuple[bool, str, str]:
+             screen_type: str = "", region: str = "") -> tuple[bool, str, str]:
         """
         day: 'YYYY-MM-DD' 의 일(day) 숫자만 사용(예 '19'). hhmm: '21:10'.
         반환: (성공, 좌석문자열, 메시지)
@@ -125,19 +125,30 @@ class Booker:
             p.wait_for_timeout(2000)
 
             self._shot("1movie")
-            # 2) 극장 선택 — 극장 추가(+) → 지점 클릭 → 극장선택
-            logger.info("[grab] 극장 선택: %s", theater)
-            # 지점이 이미 안 보이면 극장 추가(+) 열기
-            if not p.locator(f"text={theater}").count():
-                self._click_visible(["button:has-text('극장선택')", "[class*='btn-icon']",
-                                     "button.btn-icon"])
-                p.wait_for_timeout(1200)
-            # 지점명 클릭(보이는 것)
-            self._click_visible([f"text={theater}"])
-            p.wait_for_timeout(800)
-            # 극장선택 확정 버튼(있으면)
-            self._click_visible([SEL_THEATER_CONFIRM])
-            p.wait_for_timeout(2000)
+            # 2) 극장 선택 — 극장 추가 모달 열기 → 지역 → 지점 → 극장선택(확정)
+            logger.info("[grab] 극장 선택: %s (지역 %s)", theater, region or "?")
+            # 극장 추가 모달 열기(+). 이미 모달/지점 텍스트가 없으면 연다.
+            self._click_visible(["[class*='btn-icon']", "button.btn-icon",
+                                 "button:has-text('극장')"])
+            p.wait_for_timeout(1200)
+            # 지역 먼저 선택(모달 왼쪽)
+            if region:
+                self._click_visible([f"text={region}", f":has-text('{region}')"])
+                p.wait_for_timeout(900)
+            # 지점 선택(보이는 것)
+            if not self._click_visible([f"text={theater}"]):
+                self._shot("2theater")
+                return False, "", f"극장 '{theater}' 선택 실패(지역 모달 확인 필요)"
+            p.wait_for_timeout(700)
+            # 극장선택 확정
+            self._click_visible(["text=극장선택", "button:has-text('극장선택')",
+                                 ":has-text('극장선택')"])
+            # 바텀 모달이 닫힐 때까지 대기(안 닫히면 뒤 클릭이 막힘)
+            for _ in range(10):
+                if p.locator(".cgv-bot-modal.active, .modal-bg").count() == 0:
+                    break
+                p.wait_for_timeout(500)
+            p.wait_for_timeout(1000)
             self._shot("2theater")
 
             # 3) 날짜 선택

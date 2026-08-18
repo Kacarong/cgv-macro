@@ -121,7 +121,7 @@ def _resolve(target: Target, cache: dict) -> tuple[str, str, str, str] | None:
         return cache[tkey]
     try:
         mov_no, mov_nm = cgv_api.resolve_movie(target.movie, target.movie_code)
-        site_no, site_nm = cgv_api.resolve_theater(target.theater, target.theater_code)
+        site_no, site_nm, _region = cgv_api.resolve_theater(target.theater, target.theater_code)
         cache[tkey] = (mov_no, mov_nm, site_no, site_nm)
         logger.info("[%s] 해석: 영화 %s(%s) / 극장 %s(%s)",
                     target.name, mov_nm, mov_no, site_nm, site_no)

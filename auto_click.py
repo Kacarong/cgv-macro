@@ -47,7 +47,7 @@ def main() -> int:
     notifier = DiscordNotifier(cfg.discord["webhook_url"], cfg.discord.get("mention", ""))
 
     mov_no, mov_nm = cgv_api.resolve_movie(target.movie, target.movie_code)
-    site_no, site_nm = cgv_api.resolve_theater(target.theater, target.theater_code)
+    site_no, site_nm, region = cgv_api.resolve_theater(target.theater, target.theater_code)
     logger.info("자동클릭 대상: %s / %s / %s %s~%s (좌석 %d, %s)",
                 mov_nm, site_nm, target.date, target.time_from, target.time_to,
                 args.count, args.prefer)
@@ -74,7 +74,7 @@ def main() -> int:
                 ok, seat_str, msg = booker.grab(
                     movie=mov_nm, theater=target.theater or site_nm, day=target.date,
                     hhmm=s.time, count=args.count, prefer=args.prefer,
-                    preferred=preferred, screen_type=target.screen_type)
+                    preferred=preferred, screen_type=target.screen_type, region=region)
                 notifier.notify_showtime(
                     kind="seat_held" if ok else "available",
                     target_name=target.name, movie=mov_nm, theater=site_nm,

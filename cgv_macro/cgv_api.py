@@ -102,23 +102,24 @@ def resolve_movie(movie: str, movie_code: str = "") -> tuple[str, str]:
     return str(m.get("movNo")), str(m.get("movNm"))
 
 
-def resolve_theater(theater: str, theater_code: str = "") -> tuple[str, str]:
-    """극장명 또는 siteNo → (siteNo, siteNm). 실패 시 CgvApiError."""
+def resolve_theater(theater: str, theater_code: str = "") -> tuple[str, str, str]:
+    """극장명 또는 siteNo → (siteNo, siteNm, regionNm). 실패 시 CgvApiError."""
     if theater_code:
-        return theater_code, theater or theater_code
+        return theater_code, theater or theater_code, ""
     data = _get("searchRegnList", coCd=CO_CD) or []
-    sites = []
+    pairs = []  # (site, regionNm)
     for reg in data:
+        rn = str(reg.get("regnGrpNm", ""))
         for s in reg.get("siteList", []):
-            sites.append(s)
-    cands = [s for s in sites if theater and theater in str(s.get("siteNm", ""))]
+            pairs.append((s, rn))
+    cands = [(s, rn) for (s, rn) in pairs if theater and theater in str(s.get("siteNm", ""))]
     if not cands:
         raise CgvApiError(f"극장 '{theater}' 를 못 찾음.")
-    exact = [s for s in cands if str(s.get("siteNm")) == theater]
-    s = (exact or cands)[0]
+    exact = [(s, rn) for (s, rn) in cands if str(s.get("siteNm")) == theater]
+    s, rn = (exact or cands)[0]
     if len(cands) > 1:
-        logger.info("극장 후보 %d개, '%s' 선택", len(cands), s.get("siteNm"))
-    return str(s.get("siteNo")), str(s.get("siteNm"))
+        logger.info("극장 후보 %d개, '%s'(%s) 선택", len(cands), s.get("siteNm"), rn)
+    return str(s.get("siteNo")), str(s.get("siteNm")), rn
 
 
 # ---------------- 회차 조회 ----------------
