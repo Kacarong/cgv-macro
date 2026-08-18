@@ -1,0 +1,26 @@
+# 로컬 설정(웹훅/계정 정보 포함) 은 커밋 금지
+config.yaml
+config.local.yaml
+
+# 로그인 세션 / 브라우저 프로필
+session/
+*.storage.json
+
+# 상태 저장 파일
+state.json
+*.state.json
+
+# 로그
+logs/
+*.log
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 빌드 산출물(exe)
+build/
+dist/
+ms-playwright/

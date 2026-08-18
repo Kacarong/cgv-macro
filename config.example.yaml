@@ -1,0 +1,64 @@
+# =============================================================
+# CGV 상영 오픈/취소표 감지 + 디스코드 알림 설정 예시
+# 실제 사용 시 이 파일을 config.yaml 로 복사해서 값을 채우세요.
+#   copy:  cp config.example.yaml config.yaml   (Windows: copy config.example.yaml config.yaml)
+# config.yaml 은 .gitignore 로 커밋되지 않습니다(웹훅/개인정보 보호).
+# =============================================================
+
+# ---------- 감시 대상 (여러 개 등록 가능) ----------
+targets:
+  - name: "F1 용산 아이맥스"        # 알림에 표시할 별칭(자유)
+    movie: "F1 더 무비"             # 영화명(부분일치). movie_code 가 있으면 그걸 우선 사용
+    movie_code: ""                  # 선택: 정확한 CGV 영화코드(알면 입력, 모르면 비움)
+    theater: "용산아이파크몰"        # 지점명(부분일치) 또는 theater_code
+    theater_code: ""                # 선택: 정확한 CGV 지점코드
+    date: "2026-08-23"              # YYYY-MM-DD
+    time_from: "18:00"              # 감시할 상영시간 범위 시작(포함)
+    time_to: "23:59"                # 범위 끝(포함)
+    screen_type: ""                 # 선택: "IMAX" "4DX" "SCREENX" 등 부분일치 필터(비우면 전체)
+    # 선택: 예매 페이지 URL 을 직접 알고 있으면 여기에 넣으면 탐색 단계를 건너뜁니다.
+    booking_url: ""
+
+# ---------- 폴링 ----------
+poll:
+  interval_seconds: 45              # 기본 폴링 주기(초). 30 이상 권장(과도한 요청 방지)
+  jitter_seconds: 15                # 매 주기 0~N초 랜덤 지터 가산
+
+# ---------- 알림 조건 ----------
+alerts:
+  on_showtime_open: true            # 회차(상영)가 새로 열렸을 때
+  on_seats_available: true          # 잔여석이 존재할 때
+  on_soldout_to_available: true     # 매진 -> 잔여석 전환 시(취소표)
+  min_remaining_seats: 1            # 잔여석이 이 값 이상일 때만 알림
+
+# ---------- 좌석 자동 선택 ----------
+auto_select:
+  enabled: true                     # true 면 조건 충족 시 좌석을 자동으로 잡음(결제 직전까지)
+  count: 2                          # 잡을 좌석 수
+  prefer: "center"                  # center | front | back | any  (선호 위치)
+  preferred_seats: []               # 특정 좌석 우선 지정 예: ["H10", "H11"] (있으면 최우선)
+  # 결제는 절대 진행하지 않습니다(항상 홀드까지만). 사람이 직접 결제하세요.
+
+# ---------- 디스코드 ----------
+discord:
+  webhook_url: "https://discord.com/api/webhooks/XXXXX/YYYYY"
+  mention: ""                       # 선택: 알림 시 멘션. 예: "<@사용자ID>" 또는 "@everyone"
+
+# ---------- 세션/브라우저 ----------
+browser:
+  user_data_dir: "./session"        # 로그인 세션이 저장되는 브라우저 프로필 폴더
+  headless: true                    # 감시는 headless 권장. 최초 로그인은 login_setup.py(headed)로 1회
+  slow_mo_ms: 0                     # 디버깅용 동작 지연(ms)
+  nav_timeout_ms: 30000             # 페이지 이동 타임아웃(ms)
+
+# ---------- 오류 처리 ----------
+errors:
+  max_retries: 3                    # 폴링 1회당 실패 재시도 횟수
+  retry_backoff_seconds: 5          # 재시도 간 대기(초)
+  alert_after_consecutive_failures: 5  # 연속 이만큼 실패하면 디스코드로 에러 알림
+  error_alert_cooldown_seconds: 900    # 에러 알림 최소 간격(초) — 도배 방지
+
+# ---------- 로그 ----------
+logging:
+  dir: "./logs"
+  level: "INFO"                     # DEBUG | INFO | WARNING | ERROR
