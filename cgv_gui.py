@@ -241,6 +241,7 @@ class App(tk.Tk):
         bf = ttk.Frame(self)
         bf.pack(fill="x", **pad)
         ttk.Button(bf, text="설정 저장", command=self._save).pack(side="left", padx=4)
+        ttk.Button(bf, text="설정 불러오기", command=self._reload).pack(side="left", padx=4)
         ttk.Button(bf, text="CGV 로그인", command=self._login).pack(side="left", padx=4)
         ttk.Button(bf, text="디스코드 테스트", command=self._test_discord).pack(side="left", padx=4)
         self.btn_start = ttk.Button(bf, text="감시 시작", command=self._start)
@@ -335,6 +336,16 @@ class App(tk.Tk):
             return False
         self._log(f"설정 저장 완료 → {CONFIG_PATH}")
         return True
+
+    def _reload(self) -> None:
+        import os
+        if not os.path.exists(CONFIG_PATH):
+            messagebox.showinfo("안내",
+                                f"이 폴더에 저장된 설정(config.yaml)이 없습니다.\n"
+                                f"먼저 '설정 저장'을 하거나, config.yaml 이 있는 폴더에서 실행하세요.")
+            return
+        self._load_existing()
+        self._log(f"설정을 불러왔습니다 ← {os.path.abspath(CONFIG_PATH)}")
 
     def _load_existing(self) -> None:
         data = load_raw(CONFIG_PATH)
