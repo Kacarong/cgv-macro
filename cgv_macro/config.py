@@ -147,9 +147,9 @@ def load_config(path: str) -> Config:
         raw=data,
     )
 
-    # 안전 가드: 폴링 주기 하한
-    if cfg.poll["interval_seconds"] < 30:
-        cfg.poll["interval_seconds"] = 30
+    # 안전 가드: 폴링 주기 하한(5초). 너무 빠르면 IP 차단 위험.
+    if cfg.poll["interval_seconds"] < 5:
+        cfg.poll["interval_seconds"] = 5
 
     if not cfg.discord.get("webhook_url"):
         raise ConfigError("discord.webhook_url 이 비어 있습니다. 디스코드 웹훅 URL 을 넣으세요.")

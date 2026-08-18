@@ -156,7 +156,7 @@ class App(tk.Tk):
 
         r = 0
         ttk.Label(sf, text="폴링 주기(초)").grid(row=r, column=0, sticky="e", **pad)
-        ttk.Spinbox(sf, from_=30, to=3600, textvariable=self.v_interval, width=8).grid(row=r, column=1, sticky="w", **pad)
+        ttk.Spinbox(sf, from_=5, to=3600, textvariable=self.v_interval, width=8).grid(row=r, column=1, sticky="w", **pad)
         ttk.Label(sf, text="지터(초)").grid(row=r, column=2, sticky="e", **pad)
         ttk.Spinbox(sf, from_=0, to=120, textvariable=self.v_jitter, width=8).grid(row=r, column=3, sticky="w", **pad)
         r += 1
@@ -235,7 +235,7 @@ class App(tk.Tk):
     # ---------- 설정 ----------
     def _collect_settings(self) -> dict:
         return {
-            "interval": max(30, self.v_interval.get()),
+            "interval": max(5, self.v_interval.get()),
             "jitter": self.v_jitter.get(),
             "min_seats": self.v_min.get(),
             "a_open": self.v_open.get(),
