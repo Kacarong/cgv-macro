@@ -129,7 +129,7 @@ class Booker:
             #    (상단 X 닫기 버튼과 혼동 금지). 모달이 실제 열렸는지 검증.
             logger.info("[grab] 극장 선택: %s (지역 %s)", theater, region or "?")
 
-            logger.info("[grab] theater-open v7")
+            logger.info("[grab] theater-open v8")
 
             def _visible(sel: str) -> bool:
                 loc = p.locator(sel)
@@ -145,46 +145,47 @@ class Booker:
                 return (_visible("input[placeholder*='지역']")
                         or _visible("text=지역별"))
 
-            # 라벨과 같은 줄, 오른쪽의 '아이콘 크기' 요소 중 가장 오른쪽(=⊕)의 좌표를 반환
-            find_js = r"""() => {
+            # '실제로 보이는' 라벨의 위치만 반환(숨은 복제본 무시)
+            find_label_js = r"""() => {
               const all=[...document.querySelectorAll('*')];
-              const label=all.find(e=>e.children.length===0 && e.textContent &&
+              const cand=all.filter(e=>e.children.length===0 && e.textContent &&
                     e.textContent.trim().includes('선택 된 극장'));
-              if(!label) return null;
-              const lr=label.getBoundingClientRect();
-              const cyL=lr.top+lr.height/2;
-              let best=null,bestX=-1;
-              for(const el of all){
-                const r=el.getBoundingClientRect();
-                if(r.width===0||r.height===0||r.width>90||r.height>90) continue;
-                const cy=r.top+r.height/2;
-                if(Math.abs(cy-cyL)<26 && r.left>lr.right+30 && r.left<lr.right+760){
-                  if(r.left>bestX){best=el;bestX=r.left;}
-                }
-              }
-              if(!best) return null;
-              const r=best.getBoundingClientRect();
-              const cn=(typeof best.className==='string')?best.className:'';
-              return {x:Math.round(r.left+r.width/2), y:Math.round(r.top+r.height/2),
-                      info:best.tagName+'.'+cn};
+              const vis=cand.find(e=>{const r=e.getBoundingClientRect();
+                    return r.width>0 && r.height>0 && e.offsetParent!==null;});
+              if(!vis) return null;
+              const r=vis.getBoundingClientRect();
+              return {left:Math.round(r.left), right:Math.round(r.right),
+                      y:Math.round(r.top+r.height/2)};
             }"""
-            for attempt in range(3):
+            c = None
+            try:
+                c = p.evaluate(find_label_js)
+            except Exception as e:  # noqa: BLE001
+                logger.info("[grab] 라벨탐색 오류: %s", e)
+            if not c:
+                self._shot("2theater"); return False, "", "극장 라벨(보이는 것)을 못 찾음"
+            logger.info("[grab] 보이는 라벨 left=%d right=%d y=%d", c["left"], c["right"], c["y"])
+
+            # 라벨 오른쪽(⊕ 예상 위치)을 여러 지점 실제 마우스로 클릭하며 모달 열릴 때까지 시도
+            y = c["y"]
+            offsets = [430, 400, 460, 380, 500, 350, 540, 300, 250, 200, 150, 100, 60]
+            xs = []
+            for off in offsets:
+                x = c["right"] + off
+                if x not in xs and x < 1420:
+                    xs.append(x)
+            opened_x = None
+            for x in xs:
                 if _modal_open():
                     break
                 try:
-                    c = p.evaluate(find_js)
-                except Exception as e:  # noqa: BLE001
-                    c = None
-                    logger.info("[grab] find_js 오류: %s", e)
-                if c:
-                    logger.info("[grab] 극장추가 아이콘@%s,%s %s", c["x"], c["y"], str(c["info"])[:50])
-                    try:
-                        p.mouse.click(c["x"], c["y"])
-                    except Exception as e:  # noqa: BLE001
-                        logger.info("[grab] 마우스클릭 오류: %s", e)
-                else:
-                    logger.info("[grab] 극장추가 아이콘 못 찾음#%d", attempt + 1)
-                p.wait_for_timeout(1800)
+                    p.mouse.click(x, y)
+                except Exception:  # noqa: BLE001
+                    continue
+                p.wait_for_timeout(650)
+                if _modal_open():
+                    opened_x = x; break
+            logger.info("[grab] 극장추가 클릭 결과: 열림=%s (x=%s)", _modal_open(), opened_x)
             self._shot("2a_modalopen")
             logger.info("[grab] 모달열림=%s 지역'%s'후보=%d 지점'%s'후보=%d",
                         _modal_open(), region, p.locator(f"text={region}").count(),
