@@ -51,6 +51,13 @@ class StateStore:
     ) -> None:
         self.data.setdefault(target_key, {})[showtime_key] = record
 
+    def is_seeded(self, target_key: str) -> bool:
+        """이 대상이 최초 폴링(기준선 저장)을 이미 마쳤는지."""
+        return target_key in (self.data.get("__seeded__") or {})
+
+    def mark_seeded(self, target_key: str) -> None:
+        self.data.setdefault("__seeded__", {})[target_key] = True
+
     def already_notified(self, target_key: str, showtime_key: str, kind: str) -> bool:
         rec = self.get_showtime(target_key, showtime_key)
         return kind in (rec.get("notified") or [])

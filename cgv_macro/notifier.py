@@ -102,6 +102,14 @@ class DiscordNotifier:
             payload["content"] = self.mention
         return self._post(payload)
 
+    def notify_info(self, title: str, message: str) -> bool:
+        """일반 정보 알림(감시 시작 요약 등)."""
+        embed = {"title": title, "description": message[:1900], "color": 0x95A5A6}
+        payload: dict[str, Any] = {"embeds": [embed]}
+        if self.mention:
+            payload["content"] = self.mention
+        return self._post(payload)
+
     def notify_error(self, message: str, cooldown_seconds: int = 900) -> bool:
         """에러 알림. cooldown 내 반복 호출은 억제(도배 방지)."""
         now = time.time()
