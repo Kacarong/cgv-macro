@@ -129,50 +129,44 @@ class Booker:
             #    (상단 X 닫기 버튼과 혼동 금지). 모달이 실제 열렸는지 검증.
             logger.info("[grab] 극장 선택: %s (지역 %s)", theater, region or "?")
 
-            logger.info("[grab] theater-open v4")
+            logger.info("[grab] theater-open v5")
 
             def _modal_open() -> bool:
                 return (p.locator("input[placeholder*='지역']").count() > 0
                         or p.locator("text=지역별").count() > 0)
 
-            # '선택 된 극장이 없습니다' 줄의 가장 오른쪽 버튼(=+ 극장추가) 클릭
+            # '선택 된 극장이 없습니다' 줄의 오른쪽(⊕ 위치)을 훑어 클릭 가능한 요소를 클릭
             open_js = r"""() => {
               const all=[...document.querySelectorAll('*')];
               const label=all.find(e=>e.children.length===0 && e.textContent &&
                     e.textContent.trim().includes('선택 된 극장'));
               if(!label) return 'no-label';
-              let node=label.parentElement, cands=[];
-              for(let up=0; up<6 && node; up++, node=node.parentElement){
-                cands=[...node.querySelectorAll('button,[role=button],a,svg,i,span')]
-                       .filter(x=>x.offsetParent!==null);
-                if(cands.length) break;
+              const lr=label.getBoundingClientRect();
+              const y=lr.top+lr.height/2;
+              const xStart=Math.min(window.innerWidth-30, lr.left+640);
+              for(let x=xStart; x>lr.right; x-=5){
+                const el=document.elementFromPoint(x,y);
+                if(!el) continue;
+                let n=el;
+                for(let k=0;k<5 && n;k++,n=n.parentElement){
+                  const cs=getComputedStyle(n);
+                  if(n.tagName==='BUTTON'||n.getAttribute('role')==='button'||cs.cursor==='pointer'){
+                    n.click();
+                    return 'clicked@'+Math.round(x)+','+Math.round(y)+' <'+n.tagName+'>';
+                  }
+                }
               }
-              if(!cands.length) return 'no-button';
-              const best=cands.reduce((a,b)=>
-                 a.getBoundingClientRect().left>=b.getBoundingClientRect().left?a:b);
-              best.click();
-              return 'clicked@'+Math.round(best.getBoundingClientRect().left);
+              return 'no-plus';
             }"""
-            # 방법1: JS로 오른쪽 버튼 클릭
-            if not _modal_open():
+            for attempt in range(2):
+                if _modal_open():
+                    break
                 try:
                     res = p.evaluate(open_js)
                 except Exception as e:  # noqa: BLE001
                     res = f"err:{e}"
-                logger.info("[grab] 극장추가 JS클릭: %s", res)
-                p.wait_for_timeout(1600)
-            # 방법2: 그래도 안 열리면 라벨 오른쪽 좌표를 직접 클릭
-            if not _modal_open():
-                try:
-                    lbl = p.get_by_text("선택 된 극장", exact=False).first
-                    box = lbl.bounding_box()
-                    if box:
-                        x = box["x"] + 530; y = box["y"] + box["height"] / 2
-                        p.mouse.click(x, y)
-                        logger.info("[grab] 극장추가 좌표클릭 @%.0f,%.0f", x, y)
-                        p.wait_for_timeout(1600)
-                except Exception as e:  # noqa: BLE001
-                    logger.info("[grab] 좌표클릭 실패: %s", e)
+                logger.info("[grab] 극장추가 스캔클릭#%d: %s", attempt + 1, res)
+                p.wait_for_timeout(1800)
             self._shot("2a_modalopen")
             logger.info("[grab] 모달열림=%s 지역'%s'후보=%d 지점'%s'후보=%d",
                         _modal_open(), region, p.locator(f"text={region}").count(),
