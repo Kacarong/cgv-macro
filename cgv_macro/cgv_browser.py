@@ -165,16 +165,24 @@ class Booker:
                 logger.info("[grab] 극장 모달 열림=%s", opened)
             if not opened:
                 self._shot("2theater"); return False, "", "극장 추가(+) 모달 열기 실패"
+            self._shot("2a_modalopen")
+            logger.info("[grab] 모달내 지역'%s' 후보=%d, 지점'%s' 후보=%d",
+                        region, p.locator(f"text={region}").count(),
+                        theater, p.locator(f"text={theater}").count())
 
             # 지역 먼저 선택(모달 왼쪽)
             if region:
                 self._click_visible([f"text={region}", f":has-text('{region}')"])
-                p.wait_for_timeout(900)
+                p.wait_for_timeout(1500)
+            self._shot("2b_region")
+            logger.info("[grab] 지역선택 후 지점'%s' 후보=%d", theater,
+                        p.locator(f"text={theater}").count())
             # 지점 선택
             if not self._click_visible([f"text={theater}"]):
                 self._shot("2theater")
                 return False, "", f"극장 '{theater}' 선택 실패(지역 모달 확인 필요)"
             p.wait_for_timeout(700)
+            self._shot("2c_site")
             # 극장선택 확정
             self._click_visible(["text=극장선택", "button:has-text('극장선택')",
                                  ":has-text('극장선택')"])
