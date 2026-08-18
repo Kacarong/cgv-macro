@@ -119,7 +119,7 @@ class Booker:
             p.goto("https://cgv.co.kr/cnm/movieBook/cinema", wait_until="domcontentloaded")
             p.wait_for_timeout(3000)
 
-            logger.info("[grab] region/theater v11")
+            logger.info("[grab] region/theater v15")
             p.wait_for_timeout(1500)
 
             def _modal_blocking() -> bool:
@@ -132,30 +132,51 @@ class Booker:
                         pass
                 return False
 
-            # 극장 선택 모달: 검색창에 극장명 입력 → 결과에서 극장 클릭
+            # 1) 검색창에 극장명 입력(결과 필터 + 지역 자동선택)
             si = p.locator("input[placeholder*='극장'], input[placeholder*='지역']")
             if si.count():
                 try:
-                    si.first.click(); si.first.fill(theater); p.wait_for_timeout(1300)
+                    si.first.click(); si.first.fill(theater); p.wait_for_timeout(1500)
                 except Exception:  # noqa: BLE001
                     pass
-            else:
-                # 검색창이 없으면 지역 먼저 클릭
-                if region:
-                    self._click_visible([f"text={region}"]); p.wait_for_timeout(1500)
-            if not self._click_visible([f"text={theater}"]):
-                self._shot("2theater"); return False, "", f"극장 '{theater}' 못 찾음"
-            logger.info("[grab] 극장 클릭: %s", theater)
-            p.wait_for_timeout(700)
+            elif region:
+                self._click_visible([f"text={region}"]); p.wait_for_timeout(1500)
 
-            # 극장선택(확정) 눌러 모달 닫기 — 닫힐 때까지 재시도
-            for _ in range(8):
+            # 2) 결과에서 극장명과 '정확히 일치하는 보이는 요소'를 JS로 클릭
+            click_theater_js = r"""(t)=>{
+              const els=[...document.querySelectorAll('*')].filter(e=>
+                e.children.length===0 && e.textContent && e.textContent.trim()===t);
+              const vis=els.find(e=>{const r=e.getBoundingClientRect();
+                return r.width>0 && r.height>0 && e.offsetParent!==null;});
+              if(!vis) return 'no-theater('+els.length+')';
+              vis.scrollIntoView({block:'center'}); vis.click(); return 'ok';
+            }"""
+            rt = p.evaluate(click_theater_js, theater)
+            logger.info("[grab] 극장결과 클릭: %s", rt)
+            if rt != "ok":
+                # 폴백: 텍스트 보이는 것 클릭
+                if not self._click_visible([f"text={theater}"]):
+                    self._shot("2theater"); return False, "", f"극장 '{theater}' 결과 못 찾음"
+            p.wait_for_timeout(900)
+
+            # 3) '극장선택' 확정 버튼을 JS로 찾아 클릭 → 모달 닫힘 대기
+            click_confirm_js = r"""()=>{
+              const els=[...document.querySelectorAll('button,[role=button],a,div,span')].filter(e=>
+                (e.textContent||'').trim()==='극장선택');
+              const vis=els.find(e=>{const r=e.getBoundingClientRect();
+                return r.width>0 && r.height>0 && e.offsetParent!==null;});
+              if(!vis) return 'no-confirm('+els.length+')';
+              vis.scrollIntoView({block:'center'}); vis.click(); return 'ok';
+            }"""
+            for i in range(8):
                 if not _modal_blocking():
                     break
-                self._click_visible(["button:has-text('극장선택')", "text=극장선택"])
-                p.wait_for_timeout(800)
+                cr = p.evaluate(click_confirm_js)
+                if i == 0:
+                    logger.info("[grab] 극장선택 확정: %s", cr)
+                p.wait_for_timeout(900)
             logger.info("[grab] 극장모달 닫힘=%s", not _modal_blocking())
-            p.wait_for_timeout(1500)
+            p.wait_for_timeout(1200)
             self._shot("2theater")
 
             # 3) 날짜 선택 (dayScroll)

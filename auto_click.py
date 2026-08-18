@@ -75,19 +75,18 @@ def main() -> int:
                     movie=mov_nm, theater=target.theater or site_nm, day=target.date,
                     hhmm=s.time, count=args.count, prefer=args.prefer,
                     preferred=preferred, screen_type=target.screen_type, region=region)
-                notifier.notify_showtime(
-                    kind="seat_held" if ok else "available",
-                    target_name=target.name, movie=mov_nm, theater=site_nm,
-                    date=target.date, showtime=s.time,
-                    screen=f"{s.screen} ({s.fmt})", status_text=msg,
-                    booking_url="https://cgv.co.kr/cnm/movieBook/movie",
-                    seat_info=seat_str)
                 if ok:
+                    notifier.notify_showtime(
+                        kind="seat_held", target_name=target.name, movie=mov_nm,
+                        theater=site_nm, date=target.date, showtime=s.time,
+                        screen=f"{s.screen} ({s.fmt})", status_text=msg,
+                        booking_url="https://cgv.co.kr/cnm/movieBook/movie",
+                        seat_info=seat_str)
                     logger.info("완료 — 좌석 홀드됨(%s). 브라우저에서 결제하세요. 종료.", seat_str)
                     input("Enter 로 종료(홀드 유지하려면 결제 먼저)... ")
                     break
                 else:
-                    logger.warning("좌석 잡기 실패: %s — 계속 감시", msg)
+                    logger.warning("좌석 잡기 실패: %s — 계속 감시", str(msg).splitlines()[0])
             else:
                 logger.info("아직 예매가능 회차 없음 — 대기")
             time.sleep(args.interval)
