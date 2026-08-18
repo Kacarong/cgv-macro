@@ -1,3 +1,4 @@
 PyYAML>=6.0
-# 좌석 자동 클릭(auto_click.py / learn_seat.py)에만 필요. 감지+알림만 쓰면 없어도 됨.
+# playwright is only needed for seat auto-click (auto_click.py / learn_seat.py).
+# Detection + Discord alerts work without it.
 playwright>=1.44
