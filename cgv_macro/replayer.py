@@ -327,5 +327,13 @@ class Grabber:
         for idx in chosen:
             el = seats.nth(idx)
             picked.append(label(el))
-            el.click(); p.wait_for_timeout(400)
+            # modal-bg 오버레이가 막아도 눌리도록 강제/직접 클릭
+            try:
+                el.click(force=True, timeout=4000)
+            except Exception:  # noqa: BLE001
+                try:
+                    el.evaluate("e=>e.click()")
+                except Exception:  # noqa: BLE001
+                    pass
+            p.wait_for_timeout(400)
         return True, ", ".join([x for x in picked if x]) or f"{len(chosen)}석", "ok"
