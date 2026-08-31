@@ -211,7 +211,7 @@ class Grabber:
                         logger.info("[replay] 날짜 클릭: %s일", got)
                     else:
                         logger.info("[replay] 날짜 %s일 못 찾음(달력에 안 보임?)", day_num)
-                    p.wait_for_timeout(2500)
+                    p.wait_for_timeout(1500)
 
                 elif kind == "showtime":
                     done["showtime"] = True
@@ -268,33 +268,40 @@ class Grabber:
                             continue
                         done["pay"] = True
                         # 결제하기(좌석요약) → '결제 전 확인' 모달 결제하기 → 결제수단 페이지.
-                        # 실제 마우스 클릭(Playwright). 최대 2번만(그 이상 최종 결제버튼 절대 안 누름).
+                        # 버튼이 뜨는 '즉시' 실제 클릭(고정 대기 없음). 최대 2번(최종 결제버튼은 안 누름).
+                        def _pay_page() -> bool:
+                            return bool(p.locator("text=결제수단").count() or p.locator("text=간편결제").count()
+                                        or p.locator("text=신용/체크카드").count()
+                                        or p.locator("text=포인트/쿠폰").count()
+                                        or "/payment" in p.url.lower())
                         for i in range(2):
-                            p.wait_for_timeout(1600)
-                            if (p.locator("text=결제수단").count() or p.locator("text=간편결제").count()
-                                    or p.locator("text=신용/체크카드").count()
-                                    or p.locator("text=포인트/쿠폰").count()
-                                    or "/payment" in p.url.lower()):
+                            if _pay_page():
                                 logger.info("[replay] 결제수단 페이지 감지 — 중단")
                                 break
-                            top = p.evaluate(MARK_PAY_JS)
+                            top = None
+                            for _ in range(24):  # 최대 ~3.6s, 뜨는 즉시 클릭
+                                top = p.evaluate(MARK_PAY_JS)
+                                if top is not None:
+                                    break
+                                p.wait_for_timeout(150)
                             if top is None:
                                 logger.info("[replay] 결제하기 버튼 없음 — 중단")
                                 break
                             try:
-                                p.locator("[data-pay='1']").first.click(timeout=4000)
+                                p.locator("[data-pay='1']").first.click(timeout=3000)
                             except Exception:  # noqa: BLE001
                                 try:
-                                    p.locator("[data-pay='1']").first.click(force=True, timeout=3000)
+                                    p.locator("[data-pay='1']").first.click(force=True, timeout=2000)
                                 except Exception:  # noqa: BLE001
                                     pass
                             logger.info("[replay] 결제하기 실제클릭 %d @top%s", i + 1, top)
+                            p.wait_for_timeout(400)
                         self._shot("payment")
                         logger.info("[replay] 결제(수단) 페이지 진입 — 좌석 선점 완료")
                         return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
                     r = p.evaluate(CLICK_TEXT_JS, {"txt": txt, "cls": step.get("cls", "")})
                     logger.info("[replay] 클릭 '%s' → %s", txt[:14], r)
-                p.wait_for_timeout(1000)
+                p.wait_for_timeout(450)
 
             # 결제하기 스텝이 없었으면 여기까지 = 선택완료 상태
             self._shot("done")
@@ -317,7 +324,7 @@ class Grabber:
         for label, n in persons.items():
             r = p.evaluate(pick_js, {"label": label, "n": n})
             logger.info("[replay] 인원 %s %d명 → %s", label, n, r)
-            p.wait_for_timeout(600)
+            p.wait_for_timeout(300)
 
     def _pick_seats(self, total: int, prefer: str, preferred: list[str],
                     only_preferred: bool) -> tuple[bool, str, str]:
@@ -364,5 +371,5 @@ class Grabber:
                     el.evaluate("e=>e.click()")
                 except Exception:  # noqa: BLE001
                     pass
-            p.wait_for_timeout(400)
+            p.wait_for_timeout(200)
         return True, ", ".join([x for x in picked if x]) or f"{len(chosen)}석", "ok"
