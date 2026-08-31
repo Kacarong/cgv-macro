@@ -89,8 +89,16 @@ class App(ctk.CTk):
         ctk.CTkLabel(head, text="취소표·오픈 감지 → 좌석 자동 잡기", text_color=SUB,
                      font=ctk.CTkFont(size=12)).pack(side="left", padx=10)
 
+        # 탭: 감시 / 설정
+        self.tabs = ctk.CTkTabview(self, fg_color=BG,
+                                   segmented_button_selected_color=RED,
+                                   segmented_button_selected_hover_color=RED_DK)
+        self.tabs.pack(fill="both", expand=True, padx=10, pady=(2, 4))
+        main = self.tabs.add("감시")
+        sett = self.tabs.add("설정")
+
         # 모드
-        mc = self._card(self)
+        mc = self._card(main)
         self.mode = ctk.CTkSegmentedButton(
             mc, values=["취소표 감지", "상영 오픈 감지"], selected_color=RED,
             selected_hover_color=RED_DK, font=ctk.CTkFont(size=13, weight="bold"),
@@ -99,7 +107,7 @@ class App(ctk.CTk):
         self.mode.pack(fill="x", padx=16, pady=12)
 
         # 대상
-        tc = self._card(self, "대상 선택")
+        tc = self._card(main, "대상 선택")
         grid = ctk.CTkFrame(tc, fg_color=PANEL)
         grid.pack(fill="x", padx=16, pady=(4, 12))
         for i in range(4):
@@ -130,7 +138,7 @@ class App(ctk.CTk):
                       command=self._load_times).grid(row=3, column=2, sticky="ew", padx=6, pady=(0, 6))
 
         # 인원 / 좌석
-        pc = self._card(self, "인원 · 좌석")
+        pc = self._card(main, "인원 · 좌석")
         prow = ctk.CTkFrame(pc, fg_color=PANEL); prow.pack(fill="x", padx=16, pady=(4, 4))
         self.n_gen = ctk.CTkOptionMenu(prow, values=[str(i) for i in range(0, 9)], width=64,
                                        fg_color="#2A2A30", button_color=RED, button_hover_color=RED_DK)
@@ -158,17 +166,9 @@ class App(ctk.CTk):
                                         fg_color="#2A2A30", button_color=RED, button_hover_color=RED_DK)
         self.dd_int.set("10"); self.dd_int.pack(side="left")
 
-        # 디스코드
-        dc = self._card(self, "디스코드 알림 (선택)")
-        drow = ctk.CTkFrame(dc, fg_color=PANEL); drow.pack(fill="x", padx=16, pady=(4, 12))
-        self.e_hook = ctk.CTkEntry(drow, placeholder_text="웹훅 URL", width=430, fg_color="#2A2A30")
-        self.e_hook.pack(side="left", padx=(6, 6))
-        self.e_ment = ctk.CTkEntry(drow, placeholder_text="멘션 ID", width=140, fg_color="#2A2A30")
-        self.e_ment.pack(side="left")
-
-        # 녹화 + 감시
-        ac = self._card(self, "녹화 · 감시")
-        r1 = ctk.CTkFrame(ac, fg_color=PANEL); r1.pack(fill="x", padx=16, pady=(4, 4))
+        # === 설정 탭: 녹화 + 디스코드 ===
+        rc = self._card(sett, "녹화 (최초 1회 · 로그인 + 예매 클릭 기록)")
+        r1 = ctk.CTkFrame(rc, fg_color=PANEL); r1.pack(fill="x", padx=16, pady=(4, 12))
         self.b_rec = ctk.CTkButton(r1, text="녹화 시작하기", fg_color="#33333A", hover_color="#44444C",
                                    width=120, command=self._rec_open)
         self.b_rec.pack(side="left")
@@ -181,6 +181,15 @@ class App(ctk.CTk):
         self.b_rec_end.pack(side="left")
         self.rec_stat = ctk.CTkLabel(r1, text="", text_color=SUB); self.rec_stat.pack(side="left", padx=12)
 
+        dc = self._card(sett, "디스코드 알림 (선택)")
+        drow = ctk.CTkFrame(dc, fg_color=PANEL); drow.pack(fill="x", padx=16, pady=(4, 12))
+        self.e_hook = ctk.CTkEntry(drow, placeholder_text="웹훅 URL", width=430, fg_color="#2A2A30")
+        self.e_hook.pack(side="left", padx=(6, 6))
+        self.e_ment = ctk.CTkEntry(drow, placeholder_text="멘션 ID", width=140, fg_color="#2A2A30")
+        self.e_ment.pack(side="left")
+
+        # === 감시 탭: 감시 시작/중지 ===
+        ac = self._card(main, "감시")
         r2 = ctk.CTkFrame(ac, fg_color=PANEL); r2.pack(fill="x", padx=16, pady=(4, 12))
         ctk.CTkButton(r2, text="설정 저장", fg_color="#33333A", hover_color="#44444C", width=90,
                       command=self._save).pack(side="left")
@@ -228,13 +237,17 @@ class App(ctk.CTk):
                 if not (mv and th and day):
                     self._put("영화/극장/날짜를 먼저 선택하세요."); return
                 shows = cgv_api.fetch_showtimes(mv, th[0], day.replace("-", ""))
+                screen = "" if self.dd_screen.get() == "전체" else self.dd_screen.get()
+                if screen:
+                    shows = [s for s in shows
+                             if screen.lower() in (s.screen + " " + s.fmt).lower()]
                 labels = ["전체(자동)"]
                 self.time_map = {}
                 for s in shows:
                     lb = f"{s.time}  {s.screen} 잔여{s.remaining}"
                     labels.append(lb); self.time_map[lb] = s.time
                 self.after(0, lambda: (self.dd_time.configure(values=labels), self.dd_time.set(labels[0])))
-                self._put(f"회차 {len(shows)}건 불러옴.")
+                self._put(f"회차 {len(shows)}건 불러옴{(' ('+screen+')') if screen else ''}.")
             except Exception as e:  # noqa: BLE001
                 self._put(f"회차 불러오기 실패: {e}")
         threading.Thread(target=worker, daemon=True).start()
