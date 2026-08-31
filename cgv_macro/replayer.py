@@ -273,12 +273,14 @@ class Grabber:
                             continue
                         done["pay"] = True
                         # 좌석요약 결제하기 → '결제 전 확인' 모달 결제하기 → 결제수단 페이지.
-                        # 최대한 빠르게: 50ms 폴링 + 강제(즉시) 클릭. 딱 2번(최종 결제버튼은 안 누름).
                         def _pay_page() -> bool:
                             return bool(p.locator("text=결제수단").count() or p.locator("text=간편결제").count()
                                         or p.locator("text=신용/체크카드").count()
                                         or p.locator("text=포인트/쿠폰").count()
                                         or "/payment" in p.url.lower())
+
+                        def _confirm_open() -> bool:
+                            return bool(p.locator("text=결제 전 확인").count())
 
                         def _click_pay(tag: str, tries: int) -> bool:
                             top = None
@@ -286,39 +288,46 @@ class Grabber:
                                 top = p.evaluate(MARK_PAY_JS)
                                 if top is not None:
                                     break
-                                p.wait_for_timeout(50)
+                                p.wait_for_timeout(120)
                             if top is None:
                                 return False
+                            loc = p.locator("[data-pay='1']").first
                             try:
-                                p.locator("[data-pay='1']").first.click(force=True, timeout=1500)
+                                loc.scroll_into_view_if_needed(timeout=2000)
                             except Exception:  # noqa: BLE001
                                 pass
+                            try:
+                                loc.click(timeout=3000)          # 정상 클릭(핸들러 확실히 발동)
+                            except Exception:  # noqa: BLE001
+                                try:
+                                    loc.click(force=True, timeout=2000)
+                                except Exception:  # noqa: BLE001
+                                    pass
                             logger.info("[replay] 결제하기 %s @top%s", tag, top)
                             return True
 
-                        def _confirm_open() -> bool:
-                            return bool(p.locator("text=결제 전 확인").count())
-
-                        # 1번: 좌석요약의 결제하기 → 확인 모달
-                        _click_pay("1", 60)
-                        for _ in range(40):  # 모달 뜰 때까지
+                        # 1번: 좌석요약의 결제하기 → 확인 모달이 뜰 때까지 필요시 재시도
+                        for attempt in range(3):
                             if _confirm_open() or _pay_page():
                                 break
-                            p.wait_for_timeout(50)
+                            _click_pay(f"1.{attempt}", 40)
+                            for _ in range(30):  # 최대 ~3.6s 모달 대기
+                                if _confirm_open() or _pay_page():
+                                    break
+                                p.wait_for_timeout(120)
                         # 2번: '결제 전 확인' 모달의 결제하기를 '모달이 사라질 때까지' 재시도.
-                        # (모달이 있을 때만 누르므로 결제수단 페이지의 최종 결제버튼은 절대 안 눌림)
+                        # (모달이 있을 때만 누르므로 결제수단 페이지 최종 결제버튼은 절대 안 눌림)
                         for attempt in range(4):
                             if _pay_page() or not _confirm_open():
                                 break
-                            p.wait_for_timeout(250)  # 모달 안정화
-                            _click_pay(f"2.{attempt}", 20)
+                            p.wait_for_timeout(350)  # 모달 안정화
+                            _click_pay(f"2.{attempt}", 15)
                             for _ in range(30):
                                 if _pay_page() or not _confirm_open():
                                     break
-                                p.wait_for_timeout(50)
+                                p.wait_for_timeout(120)
                         self._shot("payment")
-                        ok_pay = _pay_page() or not _confirm_open()
-                        logger.info("[replay] 결제 진행 결과: 결제페이지=%s", ok_pay)
+                        logger.info("[replay] 결제 진행 결과: 결제수단페이지=%s", _pay_page())
                         return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
                     r = p.evaluate(CLICK_TEXT_JS, {"txt": txt, "cls": step.get("cls", "")})
                     logger.info("[replay] 클릭 '%s' → %s", txt[:14], r)
