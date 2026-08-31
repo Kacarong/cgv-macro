@@ -64,10 +64,13 @@ class Grabber:
 
     def grab(self, movie: str, day: str, hhmm: str, persons: dict | None = None,
              count: int = 2, prefer: str = "center",
-             preferred: list[str] | None = None) -> tuple[bool, str, str]:
+             preferred: list[str] | None = None,
+             only_preferred: bool = False) -> tuple[bool, str, str]:
         """
         day='2026-09-04'(일 숫자만 사용), hhmm='20:00'.
         persons: {'일반':2,'청소년':1,'우대':0} 처럼 인원 구성. 없으면 {'일반': count}.
+        preferred: 원하는 좌석 목록(예 ['E9','E10']). only_preferred=True 면 이 좌석이
+                   충분히 뜰 때까지 '잡지 않고' 대기(계속 감시용).
         반환 (성공, 좌석문자열, 메시지).
         """
         persons = {k: int(v) for k, v in (persons or {"일반": count}).items() if int(v) > 0}
@@ -160,11 +163,18 @@ class Grabber:
                 return (el.inner_text() or "").strip().upper()
 
             labels = [(label(seats.nth(i)), i) for i in range(sn)]
+            avail_set = {lb for lb, _ in labels}
             chosen: list[int] = []
             if preferred:
                 for lb, idx in labels:
                     if lb in preferred:
                         chosen.append(idx)
+                if only_preferred and len(chosen) < total:
+                    # 원하는 좌석이 아직 충분히 안 뜸 → 잡지 않고 종료(계속 감시)
+                    got = [lb for lb in preferred if lb in avail_set]
+                    self._shot("4seat")
+                    return False, "", (f"원하는 좌석 대기중(가능:{','.join(got) or '없음'} "
+                                       f"/ 필요 {total}) — 계속 감시")
             if len(chosen) < total:
                 pool = [idx for _, idx in labels if idx not in chosen]
                 if prefer == "back":
