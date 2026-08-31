@@ -1,4 +1,3 @@
 PyYAML>=6.0
-# playwright is only needed for seat auto-click (auto_click.py / learn_seat.py).
-# Detection + Discord alerts work without it.
 playwright>=1.44
+customtkinter>=5.2

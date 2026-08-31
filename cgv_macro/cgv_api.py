@@ -80,6 +80,28 @@ def _to_int(v: Any) -> int:
         return -1
 
 
+# ---------------- 목록(드롭다운용) ----------------
+def list_movies() -> list[tuple[str, str]]:
+    """예매 가능한 영화 목록 → [(movNo, movNm), ...]."""
+    data = _get("searchAtktTopPostrList", coCd=CO_CD, movNm="", div="", attrCd="") or []
+    out = []
+    for m in data:
+        if m.get("movNo"):
+            out.append((str(m.get("movNo")), str(m.get("movNm"))))
+    return out
+
+
+def list_theaters() -> list[tuple[str, str, str]]:
+    """극장 목록 → [(siteNo, siteNm, regionNm), ...]."""
+    data = _get("searchRegnList", coCd=CO_CD) or []
+    out = []
+    for reg in data:
+        rn = str(reg.get("regnGrpNm", ""))
+        for s in reg.get("siteList", []):
+            out.append((str(s.get("siteNo")), str(s.get("siteNm")), rn))
+    return out
+
+
 # ---------------- 코드 해석 ----------------
 def resolve_movie(movie: str, movie_code: str = "") -> tuple[str, str]:
     """영화명 또는 movNo → (movNo, movNm). 실패 시 CgvApiError."""

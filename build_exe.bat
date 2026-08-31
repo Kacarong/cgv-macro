@@ -17,11 +17,11 @@ if errorlevel 1 (
 if not exist ".venv\" python -m venv .venv
 call ".venv\Scripts\activate.bat"
 python -m pip install --upgrade pip
-pip install pyyaml playwright pyinstaller
+pip install pyyaml playwright customtkinter pyinstaller
 
 echo [build] running PyInstaller...
 pyinstaller --noconfirm --onefile --windowed --name CGV-Seat-Watcher ^
-  --collect-all playwright ^
+  --collect-all playwright --collect-all customtkinter ^
   --hidden-import cgv_macro.watcher --hidden-import cgv_macro.replayer ^
   --hidden-import cgv_macro.recorder --hidden-import cgv_macro.cgv_api ^
   app.py
