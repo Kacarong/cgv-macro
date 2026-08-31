@@ -29,6 +29,8 @@ def main() -> int:
 
     movie = input("영화명 [기본: 오디세이]: ").strip() or "오디세이"
     day = input("날짜 YYYY-MM-DD (예: 2026-09-04): ").strip()
+    if not any(c.isdigit() for c in day):
+        print("[!] 날짜를 입력해야 합니다(예: 2026-09-04)."); input("Enter 로 종료... "); return 1
     hhmm = input("회차 시간 HH:MM (예: 20:00): ").strip()
 
     def _num(prompt, default=0):

@@ -165,10 +165,12 @@ class Grabber:
         total = sum(persons.values()) or 1
         preferred = [s.strip().upper() for s in (preferred or [])]
         p = self.page
-        try:
-            day_num = str(int(day.split("-")[-1]))
-        except Exception:  # noqa: BLE001
-            day_num = day
+        m = re.findall(r"\d+", day or "")
+        day_num = str(int(m[-1])) if m else ""
+        logger.info("[replay] 대상 날짜=%s(일=%s) 시간=%s 영화=%s",
+                    day, day_num or "(없음)", hhmm, movie)
+        if not day_num:
+            return False, "", "날짜가 비어있습니다. 날짜를 YYYY-MM-DD 로 입력하세요."
 
         done = {"date": False, "showtime": False, "person": False, "seat": False}
         seat_str = ""
