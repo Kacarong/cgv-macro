@@ -272,35 +272,40 @@ class Grabber:
                         if done.get("pay"):
                             continue
                         done["pay"] = True
-                        # 결제하기(좌석요약) → '결제 전 확인' 모달 결제하기 → 결제수단 페이지.
-                        # 버튼이 뜨는 '즉시' 실제 클릭(고정 대기 없음). 최대 2번(최종 결제버튼은 안 누름).
+                        # 좌석요약 결제하기 → '결제 전 확인' 모달 결제하기 → 결제수단 페이지.
+                        # 최대한 빠르게: 50ms 폴링 + 강제(즉시) 클릭. 딱 2번(최종 결제버튼은 안 누름).
                         def _pay_page() -> bool:
                             return bool(p.locator("text=결제수단").count() or p.locator("text=간편결제").count()
                                         or p.locator("text=신용/체크카드").count()
                                         or p.locator("text=포인트/쿠폰").count()
                                         or "/payment" in p.url.lower())
-                        for i in range(2):
-                            if _pay_page():
-                                logger.info("[replay] 결제수단 페이지 감지 — 중단")
-                                break
+
+                        def _click_pay(tag: str, tries: int) -> bool:
                             top = None
-                            for _ in range(24):  # 최대 ~3.6s, 뜨는 즉시 클릭
+                            for _ in range(tries):
                                 top = p.evaluate(MARK_PAY_JS)
                                 if top is not None:
                                     break
-                                p.wait_for_timeout(150)
+                                p.wait_for_timeout(50)
                             if top is None:
-                                logger.info("[replay] 결제하기 버튼 없음 — 중단")
-                                break
+                                return False
                             try:
-                                p.locator("[data-pay='1']").first.click(timeout=3000)
+                                p.locator("[data-pay='1']").first.click(force=True, timeout=1500)
                             except Exception:  # noqa: BLE001
-                                try:
-                                    p.locator("[data-pay='1']").first.click(force=True, timeout=2000)
-                                except Exception:  # noqa: BLE001
-                                    pass
-                            logger.info("[replay] 결제하기 실제클릭 %d @top%s", i + 1, top)
-                            p.wait_for_timeout(400)
+                                pass
+                            logger.info("[replay] 결제하기 %s @top%s", tag, top)
+                            return True
+
+                        # 1번: 좌석요약의 결제하기
+                        _click_pay("1", 60)
+                        # 확인 모달이 뜨자마자
+                        for _ in range(40):
+                            if p.locator("text=결제 전 확인").count() or _pay_page():
+                                break
+                            p.wait_for_timeout(50)
+                        # 2번: 모달의 결제하기(이미 결제수단 페이지면 생략)
+                        if not _pay_page():
+                            _click_pay("2", 40)
                         self._shot("payment")
                         logger.info("[replay] 결제(수단) 페이지 진입 — 좌석 선점 완료")
                         return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
