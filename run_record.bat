@@ -20,5 +20,5 @@ if not exist ".venv\" (
   call ".venv\Scripts\activate.bat"
 )
 
-python record.py
+python -u record.py
 pause
