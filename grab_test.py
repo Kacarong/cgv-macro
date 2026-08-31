@@ -1,22 +1,32 @@
 """
-좌석 자동잡기 '단발 테스트' — 지금 예매 가능한 회차로 좌석잡기가 되는지 확인.
+좌석 자동잡기 '단발 테스트' (녹화 재현형).
 
-준비:  pip install playwright   +  record.py 로 CGV 로그인 + 센텀시티 선택 1회
-실행:  python grab_test.py   (또는 run_grabtest.bat 더블클릭)
+먼저 CGV 로그인 화면이 뜹니다 → 로그인하면 극장별 예매로 이동 → 녹화(recipe)를 재현.
+날짜/시간/인원/좌석만 아래 입력값으로 덮어씁니다. 결제는 결제 페이지까지만(선점).
 
-주의: 크롬은 record.py 와 같은 프로필을 씁니다. record.py 창은 닫고 실행하세요.
-결제는 안 하고 '좌석 홀드'까지만 진행합니다.
+준비:  record.py 로 '극장 선택부터 선택완료까지' 한 번 녹화(recipe.json) 필요.
+실행:  run_grabtest.bat 더블클릭  (또는 python grab_test.py)
 """
 from __future__ import annotations
 
+import json
+import os
+
 from cgv_macro import paths
 from cgv_macro.logger import setup_logger
-from cgv_macro.replayer import Grabber
+from cgv_macro.replayer import Grabber, RECIPE
 
 
 def main() -> int:
     logger = setup_logger(paths.logs_dir(), "INFO")
-    print("=== 좌석 자동잡기 테스트 (오디세이/센텀시티 기준) ===")
+    if not os.path.exists(RECIPE):
+        print(f"[!] 녹화 파일이 없습니다: {RECIPE}")
+        print("    먼저 run_record.bat 로 '극장 선택부터 선택완료까지' 한 번 녹화하세요.")
+        input("Enter 로 종료... ")
+        return 1
+    recipe = json.load(open(RECIPE, encoding="utf-8"))
+    print(f"[i] 녹화 불러옴: 클릭 {len(recipe.get('steps', []))}개")
+
     movie = input("영화명 [기본: 오디세이]: ").strip() or "오디세이"
     day = input("날짜 YYYY-MM-DD (예: 2026-09-04): ").strip()
     hhmm = input("회차 시간 HH:MM (예: 20:00): ").strip()
@@ -32,19 +42,25 @@ def main() -> int:
         "청소년": _num("  청소년 수 [기본 0]: ", 0),
         "우대": _num("  우대 수 [기본 0]: ", 0),
     }
+    seats_in = input("원하는 좌석(쉼표, 예: E9,E10) [비우면 아무거나]: ").strip()
+    preferred = [s.strip() for s in seats_in.split(",") if s.strip()]
     prefer = input("좌석 위치 center/front/back/any [기본 center]: ").strip() or "center"
 
     g = Grabber(headless=False).__enter__()
     try:
-        ok, seat, msg = g.grab(movie=movie, day=day, hhmm=hhmm, persons=persons, prefer=prefer)
+        print("\n[i] 크롬에 로그인 화면이 뜹니다. 로그인하세요(이미 로그인돼 있으면 자동 통과).")
+        if not g.ensure_login(wait_manual=True, timeout_s=300):
+            print("[!] 로그인/극장별예매 진입 실패. 다시 시도하세요.")
+            input("Enter 로 종료... "); return 1
+        print("[i] 로그인 확인 → 녹화 재현 시작.")
+        ok, seat, msg = g.replay(recipe, day=day, hhmm=hhmm, movie=movie,
+                                 persons=persons, preferred=preferred, prefer=prefer)
         print(f"\n결과: {'성공' if ok else '실패'} | 좌석: {seat} | {msg}")
         if ok:
-            print("→ 브라우저에 좌석이 홀드됐습니다. 결제는 직접 하세요(약 10분 안).")
-            input("Enter 로 종료(닫으면 홀드 풀림)... ")
+            print("→ 결제 페이지에서 멈췄습니다(좌석 선점). 카드 결제만 직접 하세요.")
         else:
-            print("→ 실패. 앱데이터 폴더의 grab_*.png 스크린샷을 개발자에게 보내주세요:")
-            print("  ", paths.data_dir())
-            input("Enter 로 종료... ")
+            print(f"→ 실패. {paths.data_dir()} 의 grab_*.png 를 보내주세요.")
+        input("Enter 로 종료... ")
     finally:
         g.close()
     return 0
