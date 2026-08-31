@@ -215,19 +215,24 @@ class Grabber:
 
                 elif kind == "showtime":
                     done["showtime"] = True
-                    r = p.evaluate(MARK_SHOW_JS, {"hhmm": hhmm, "movie": movie})
-                    if r == "nf":
-                        try:
-                            p.evaluate(
-                                "(m)=>{const t=[...document.querySelectorAll(\"[class*='accordionTitle']\")]"
-                                ".find(e=>e.textContent.includes(m)); if(t)t.click();}", movie)
-                        except Exception:  # noqa: BLE001
-                            pass
-                        p.wait_for_timeout(1000)
+                    # 시간표가 늦게 뜰 수 있으니 회차가 나타날 때까지 최대 ~6초 폴링
+                    r = "nf"
+                    for attempt in range(20):
                         r = p.evaluate(MARK_SHOW_JS, {"hhmm": hhmm, "movie": movie})
+                        if str(r).startswith("ok"):
+                            break
+                        if attempt == 4:  # 중간에 한 번 영화 아코디언 펼치기
+                            try:
+                                p.evaluate(
+                                    "(m)=>{const t=[...document.querySelectorAll(\"[class*='accordionTitle']\")]"
+                                    ".find(e=>e.textContent.includes(m)); if(t)t.click();}", movie)
+                            except Exception:  # noqa: BLE001
+                                pass
+                        p.wait_for_timeout(300)
                     logger.info("[replay] 회차 표식: %s", r)
                     if not str(r).startswith("ok"):
-                        self._shot("showtime"); return False, "", f"회차 {hhmm} 못 찾음"
+                        self._shot("showtime")
+                        return False, "", f"회차 {hhmm} 못 찾음 — 그 날 그 시간 회차가 실제로 있는지 확인하세요"
                     loc = p.locator("[data-ap='1']").first
                     try:
                         loc.scroll_into_view_if_needed(timeout=2000)
