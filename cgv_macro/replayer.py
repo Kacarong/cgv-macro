@@ -296,18 +296,29 @@ class Grabber:
                             logger.info("[replay] 결제하기 %s @top%s", tag, top)
                             return True
 
-                        # 1번: 좌석요약의 결제하기
+                        def _confirm_open() -> bool:
+                            return bool(p.locator("text=결제 전 확인").count())
+
+                        # 1번: 좌석요약의 결제하기 → 확인 모달
                         _click_pay("1", 60)
-                        # 확인 모달이 뜨자마자
-                        for _ in range(40):
-                            if p.locator("text=결제 전 확인").count() or _pay_page():
+                        for _ in range(40):  # 모달 뜰 때까지
+                            if _confirm_open() or _pay_page():
                                 break
                             p.wait_for_timeout(50)
-                        # 2번: 모달의 결제하기(이미 결제수단 페이지면 생략)
-                        if not _pay_page():
-                            _click_pay("2", 40)
+                        # 2번: '결제 전 확인' 모달의 결제하기를 '모달이 사라질 때까지' 재시도.
+                        # (모달이 있을 때만 누르므로 결제수단 페이지의 최종 결제버튼은 절대 안 눌림)
+                        for attempt in range(4):
+                            if _pay_page() or not _confirm_open():
+                                break
+                            p.wait_for_timeout(250)  # 모달 안정화
+                            _click_pay(f"2.{attempt}", 20)
+                            for _ in range(30):
+                                if _pay_page() or not _confirm_open():
+                                    break
+                                p.wait_for_timeout(50)
                         self._shot("payment")
-                        logger.info("[replay] 결제(수단) 페이지 진입 — 좌석 선점 완료")
+                        ok_pay = _pay_page() or not _confirm_open()
+                        logger.info("[replay] 결제 진행 결과: 결제페이지=%s", ok_pay)
                         return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
                     r = p.evaluate(CLICK_TEXT_JS, {"txt": txt, "cls": step.get("cls", "")})
                     logger.info("[replay] 클릭 '%s' → %s", txt[:14], r)
