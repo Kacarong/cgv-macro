@@ -182,17 +182,34 @@ class Grabber:
                 logger.info("[replay] %02d %s '%s'", i + 1, kind, txt[:16])
 
                 if kind == "date":
-                    d = p.locator("[class*='dayScroll_scrollItem']", has_text=day_num)
-                    if d.count():
+                    done["date"] = True
+                    # 보이는 날짜 항목 중 '숫자가 정확히 그 날'인 것을 표식 → 실제 클릭
+                    mark_date_js = r"""(dd)=>{
+                      const items=[...document.querySelectorAll("[class*='dayScroll_scrollItem']")].filter(e=>{
+                        const r=e.getBoundingClientRect(); return r.width>0&&r.height>0&&e.offsetParent!==null;});
+                      const dig=s=>(s||'').replace(/[^0-9]/g,'');
+                      document.querySelectorAll('[data-day]').forEach(e=>e.removeAttribute('data-day'));
+                      const el=items.find(e=>parseInt(dig(e.textContent),10)===parseInt(dd,10));
+                      if(!el) return null; el.setAttribute('data-day','1'); return dig(el.textContent);
+                    }"""
+                    got = p.evaluate(mark_date_js, day_num)
+                    if got:
+                        loc = p.locator("[data-day='1']").first
                         try:
-                            d.first.scroll_into_view_if_needed(timeout=2000)
+                            loc.scroll_into_view_if_needed(timeout=2000)
                         except Exception:  # noqa: BLE001
                             pass
-                        d.first.click()
+                        try:
+                            loc.click(timeout=4000)
+                        except Exception:  # noqa: BLE001
+                            try:
+                                loc.click(force=True, timeout=3000)
+                            except Exception:  # noqa: BLE001
+                                pass
+                        logger.info("[replay] 날짜 클릭: %s일", got)
                     else:
-                        logger.info("[replay] 날짜 %s일 버튼 못 찾음", day_num)
+                        logger.info("[replay] 날짜 %s일 못 찾음(달력에 안 보임?)", day_num)
                     p.wait_for_timeout(2500)
-                    done["date"] = True
 
                 elif kind == "showtime":
                     done["showtime"] = True
