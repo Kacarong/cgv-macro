@@ -140,12 +140,15 @@ class Grabber:
         except Exception:  # noqa: BLE001
             day_num = day
 
-        done = {"person": False, "seat": False}
+        done = {"date": False, "showtime": False, "person": False, "seat": False}
         seat_str = ""
         try:
             for i, step in enumerate(recipe.get("steps", [])):
                 kind = _classify(step)
                 txt = (step.get("txt") or "").strip()
+                # 날짜/회차/인원/좌석은 여러 번 기록됐어도 한 번만 처리
+                if kind in done and done[kind]:
+                    continue
                 logger.info("[replay] %02d %s '%s'", i + 1, kind, txt[:16])
 
                 if kind == "date":
@@ -153,8 +156,10 @@ class Grabber:
                     if d.count():
                         d.first.click()
                     p.wait_for_timeout(2500)
+                    done["date"] = True
 
                 elif kind == "showtime":
+                    done["showtime"] = True
                     r = p.evaluate(MARK_SHOW_JS, {"hhmm": hhmm, "movie": movie})
                     if r == "nf":
                         # 아코디언 펼치고 재시도
