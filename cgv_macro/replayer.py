@@ -53,6 +53,19 @@ CLICK_TEXT_JS = r"""(a)=>{
   return 'ok:'+norm(el.textContent).slice(0,18);
 }"""
 
+# 화면에서 '결제하기'가 들어간, 보이는 버튼 중 '가장 아래(모달의 빨간 버튼)'를 클릭
+CLICK_PAY_JS = r"""()=>{
+  const btns=[...document.querySelectorAll('button,a,div')].filter(e=>{
+    const t=(e.textContent||'').replace(/\s+/g,'');
+    if(!t.includes('결제하기')) return false;
+    const r=e.getBoundingClientRect();
+    return r.width>60 && r.height>10 && e.offsetParent!==null;});
+  if(!btns.length) return 'nf';
+  btns.sort((a,b)=>b.getBoundingClientRect().top-a.getBoundingClientRect().top);
+  const el=btns[0]; el.scrollIntoView({block:'center'}); el.click();
+  return 'ok@'+Math.round(el.getBoundingClientRect().top);
+}"""
+
 MARK_SHOW_JS = r"""(a)=>{const {hhmm,movie}=a;
   const T=[...document.querySelectorAll("[class*='accordionTitle']")];
   const pt=e=>{let b=null;for(const t of T){
@@ -230,23 +243,28 @@ class Grabber:
                 else:  # literal — 기록된 텍스트 그대로 클릭
                     if not txt:
                         continue
-                    r = p.evaluate(CLICK_TEXT_JS, {"txt": txt, "cls": step.get("cls", "")})
-                    logger.info("[replay] 클릭 '%s' → %s", txt[:14], r)
                     if "결제하기" in txt:
-                        p.wait_for_timeout(2200)
-                        # '결제 전 확인해 주세요' 팝업의 결제하기를 '한 번만' 눌러 결제수단 페이지로 진입.
-                        # (그 다음 페이지의 최종 결제 버튼은 누르지 않는다 — 실제 결제는 사용자)
-                        try:
-                            btn = p.get_by_role("button", name="결제하기")
-                            if btn.count() and btn.first.is_visible():
-                                btn.first.click(timeout=4000)
-                                logger.info("[replay] 결제 확인 팝업 결제하기 클릭")
-                                p.wait_for_timeout(2500)
-                        except Exception:  # noqa: BLE001
-                            pass
+                        if done.get("pay"):
+                            continue
+                        done["pay"] = True
+                        # selectVisitorCnt 결제하기 → '결제 전 확인' 모달 결제하기 → 결제수단 페이지.
+                        # 최대 2번만 클릭(그 이상 최종 결제 버튼은 절대 안 누름).
+                        for i in range(2):
+                            p.wait_for_timeout(1500)
+                            if (p.locator("text=결제수단").count() or p.locator("text=간편결제").count()
+                                    or p.locator("text=신용/체크카드").count()
+                                    or "/payment" in p.url.lower()):
+                                logger.info("[replay] 결제수단 페이지 감지 — 중단")
+                                break
+                            rr = p.evaluate(CLICK_PAY_JS)
+                            logger.info("[replay] 결제 진행 클릭 %d: %s", i + 1, rr)
+                            if not str(rr).startswith("ok"):
+                                break
                         self._shot("payment")
                         logger.info("[replay] 결제(수단) 페이지 진입 — 좌석 선점 완료")
                         return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
+                    r = p.evaluate(CLICK_TEXT_JS, {"txt": txt, "cls": step.get("cls", "")})
+                    logger.info("[replay] 클릭 '%s' → %s", txt[:14], r)
                 p.wait_for_timeout(1000)
 
             # 결제하기 스텝이 없었으면 여기까지 = 선택완료 상태
