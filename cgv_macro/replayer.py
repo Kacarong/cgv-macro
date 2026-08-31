@@ -232,10 +232,20 @@ class Grabber:
                         continue
                     r = p.evaluate(CLICK_TEXT_JS, {"txt": txt, "cls": step.get("cls", "")})
                     logger.info("[replay] 클릭 '%s' → %s", txt[:14], r)
-                    if txt == "결제하기":
-                        p.wait_for_timeout(2500)
+                    if "결제하기" in txt:
+                        p.wait_for_timeout(2200)
+                        # '결제 전 확인해 주세요' 팝업의 결제하기를 '한 번만' 눌러 결제수단 페이지로 진입.
+                        # (그 다음 페이지의 최종 결제 버튼은 누르지 않는다 — 실제 결제는 사용자)
+                        try:
+                            btn = p.get_by_role("button", name="결제하기")
+                            if btn.count() and btn.first.is_visible():
+                                btn.first.click(timeout=4000)
+                                logger.info("[replay] 결제 확인 팝업 결제하기 클릭")
+                                p.wait_for_timeout(2500)
+                        except Exception:  # noqa: BLE001
+                            pass
                         self._shot("payment")
-                        logger.info("[replay] 결제 페이지 진입 — 좌석 선점")
+                        logger.info("[replay] 결제(수단) 페이지 진입 — 좌석 선점 완료")
                         return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
                 p.wait_for_timeout(1000)
 
