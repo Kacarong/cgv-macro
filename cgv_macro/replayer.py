@@ -33,19 +33,21 @@ CINEMA_URL = "https://cgv.co.kr/cnm/movieBook/cinema"
 SEL_SEAT_OK = "button[class*='seatMap_seatNumber']:not([class*='seatDisabled'])"
 _SEAT_RE = re.compile(r"^[A-Z]{1,2}\d{1,3}$")
 
-# 텍스트로 '보이는' 요소를 찾아 클릭
+# 텍스트로 '보이는' 요소를 찾아 클릭 (정확일치 우선 → 부분일치, 버튼/링크 우선)
 CLICK_TEXT_JS = r"""(a)=>{
   const norm=s=>(s||'').replace(/\s+/g,' ').trim();
   const target=norm(a.txt); const clsHint=(a.cls||'').split(' ')[0];
   if(!target) return 'empty';
-  let cands=[...document.querySelectorAll('button,a,li,span,div,strong,em')].filter(e=>{
-    const t=norm(e.textContent); if(!t||!t.includes(target)) return false;
-    const r=e.getBoundingClientRect();
-    return r.width>0&&r.height>0&&e.offsetParent!==null;
-  });
+  const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&e.offsetParent!==null;};
+  const all=[...document.querySelectorAll('button,a,li,span,div,strong,em')].filter(vis);
+  let cands=all.filter(e=>norm(e.textContent)===target);      // 1) 정확일치
+  if(!cands.length) cands=all.filter(e=>norm(e.textContent).includes(target)); // 2) 부분일치
   if(clsHint){const pf=cands.filter(e=>typeof e.className==='string'&&e.className.includes(clsHint));
     if(pf.length) cands=pf;}
-  cands.sort((x,y)=>norm(x.textContent).length-norm(y.textContent).length);
+  cands.sort((x,y)=>{
+    const bx=(x.tagName==='BUTTON'||x.tagName==='A')?0:1, by=(y.tagName==='BUTTON'||y.tagName==='A')?0:1;
+    if(bx!==by) return bx-by;
+    return norm(x.textContent).length-norm(y.textContent).length;});
   const el=cands[0]; if(!el) return 'nf';
   el.scrollIntoView({block:'center'}); el.click();
   return 'ok:'+norm(el.textContent).slice(0,18);
@@ -53,14 +55,15 @@ CLICK_TEXT_JS = r"""(a)=>{
 
 MARK_SHOW_JS = r"""(a)=>{const {hhmm,movie}=a;
   const T=[...document.querySelectorAll("[class*='accordionTitle']")];
-  const L=[...document.querySelectorAll("[class*='screenInfo_timeLink'],[class*='screenInfo_timeWrap']")];
   const pt=e=>{let b=null;for(const t of T){
     if(t.compareDocumentPosition(e)&Node.DOCUMENT_POSITION_FOLLOWING)b=t;}return b;};
-  for(const lk of L){const x=lk.textContent||"";
-    if(x.includes(hhmm)&&!x.includes('예매종료')&&!x.includes('준비')){
-      const t=pt(lk);
-      if(!movie||(t&&t.textContent.includes(movie))){lk.setAttribute('data-ap','1');
-        return 'ok:'+x.replace(/\s+/g,' ').slice(0,26);}}}
+  for(const sel of ["[class*='screenInfo_timeLink']","[class*='cinemaSchedule_scrollItemBtn']","[class*='screenInfo_timeWrap']"]){
+    for(const lk of [...document.querySelectorAll(sel)]){const x=lk.textContent||"";
+      if(x.includes(hhmm)&&!x.includes('예매종료')&&!x.includes('준비')){
+        const t=pt(lk);
+        if(!movie||(t&&t.textContent.includes(movie))){lk.setAttribute('data-ap','1');
+          return 'ok:'+x.replace(/\s+/g,' ').slice(0,26);}}}
+  }
   return 'nf';}"""
 
 
@@ -114,6 +117,19 @@ class Grabber:
         except Exception:  # noqa: BLE001
             pass
 
+    def _wait_visitor(self, timeout_ms: int) -> bool:
+        """회차 클릭 후 인원/좌석 화면(selectVisitorCnt)으로 넘어갔는지 확인."""
+        p = self.page
+        waited = 0
+        while waited < timeout_ms:
+            if "selectVisitorCnt" in p.url:
+                return True
+            if p.locator("button.btn-num").count() > 0 or p.locator(SEL_SEAT_OK).count() > 0:
+                return True
+            p.wait_for_timeout(400)
+            waited += 400
+        return False
+
     def ensure_login(self, wait_manual: bool = True, timeout_s: int = 300) -> bool:
         """로그인 화면을 띄우고, 극장별 예매로 넘어갈 때까지(=로그인 완료) 대기."""
         p = self.page
@@ -154,7 +170,13 @@ class Grabber:
                 if kind == "date":
                     d = p.locator("[class*='dayScroll_scrollItem']", has_text=day_num)
                     if d.count():
+                        try:
+                            d.first.scroll_into_view_if_needed(timeout=2000)
+                        except Exception:  # noqa: BLE001
+                            pass
                         d.first.click()
+                    else:
+                        logger.info("[replay] 날짜 %s일 버튼 못 찾음", day_num)
                     p.wait_for_timeout(2500)
                     done["date"] = True
 
@@ -162,7 +184,6 @@ class Grabber:
                     done["showtime"] = True
                     r = p.evaluate(MARK_SHOW_JS, {"hhmm": hhmm, "movie": movie})
                     if r == "nf":
-                        # 아코디언 펼치고 재시도
                         try:
                             p.evaluate(
                                 "(m)=>{const t=[...document.querySelectorAll(\"[class*='accordionTitle']\")]"
@@ -174,10 +195,24 @@ class Grabber:
                     logger.info("[replay] 회차 표식: %s", r)
                     if not str(r).startswith("ok"):
                         self._shot("showtime"); return False, "", f"회차 {hhmm} 못 찾음"
-                    p.locator("[data-ap='1']").first.click(timeout=7000)
-                    p.wait_for_timeout(3000)
-                    if "login" in p.url:
-                        self._shot("login"); return False, "", "로그인 필요"
+                    loc = p.locator("[data-ap='1']").first
+                    try:
+                        loc.scroll_into_view_if_needed(timeout=2000)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    loc.click(timeout=7000)
+                    # 예매(인원) 화면으로 실제 전환됐는지 확인 — 안 넘어가면 좌표 실클릭 재시도
+                    if not self._wait_visitor(4000):
+                        try:
+                            box = loc.bounding_box()
+                            if box:
+                                p.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        if not self._wait_visitor(6000):
+                            self._shot("showtime")
+                            return False, "", "회차 클릭했으나 예매(인원)로 전환 안 됨 — 로그인/대기열 확인"
+                    logger.info("[replay] 예매(인원) 진입 OK")
 
                 elif kind == "person":
                     if not done["person"]:
