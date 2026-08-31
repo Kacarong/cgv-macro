@@ -53,17 +53,18 @@ CLICK_TEXT_JS = r"""(a)=>{
   return 'ok:'+norm(el.textContent).slice(0,18);
 }"""
 
-# 화면에서 '결제하기'가 들어간, 보이는 버튼 중 '가장 아래(모달의 빨간 버튼)'를 클릭
-CLICK_PAY_JS = r"""()=>{
+# 화면에서 '결제하기'가 든 보이는 버튼 중 '가장 아래' 것을 data-pay 로 표식(실제 클릭은 Playwright)
+MARK_PAY_JS = r"""()=>{
   const btns=[...document.querySelectorAll('button,a,div')].filter(e=>{
     const t=(e.textContent||'').replace(/\s+/g,'');
     if(!t.includes('결제하기')) return false;
     const r=e.getBoundingClientRect();
     return r.width>60 && r.height>10 && e.offsetParent!==null;});
-  if(!btns.length) return 'nf';
+  if(!btns.length) return null;
   btns.sort((a,b)=>b.getBoundingClientRect().top-a.getBoundingClientRect().top);
-  const el=btns[0]; el.scrollIntoView({block:'center'}); el.click();
-  return 'ok@'+Math.round(el.getBoundingClientRect().top);
+  document.querySelectorAll('[data-pay]').forEach(e=>e.removeAttribute('data-pay'));
+  btns[0].setAttribute('data-pay','1');
+  return Math.round(btns[0].getBoundingClientRect().top);
 }"""
 
 MARK_SHOW_JS = r"""(a)=>{const {hhmm,movie}=a;
@@ -247,19 +248,28 @@ class Grabber:
                         if done.get("pay"):
                             continue
                         done["pay"] = True
-                        # selectVisitorCnt 결제하기 → '결제 전 확인' 모달 결제하기 → 결제수단 페이지.
-                        # 최대 2번만 클릭(그 이상 최종 결제 버튼은 절대 안 누름).
+                        # 결제하기(좌석요약) → '결제 전 확인' 모달 결제하기 → 결제수단 페이지.
+                        # 실제 마우스 클릭(Playwright). 최대 2번만(그 이상 최종 결제버튼 절대 안 누름).
                         for i in range(2):
-                            p.wait_for_timeout(1500)
+                            p.wait_for_timeout(1600)
                             if (p.locator("text=결제수단").count() or p.locator("text=간편결제").count()
                                     or p.locator("text=신용/체크카드").count()
+                                    or p.locator("text=포인트/쿠폰").count()
                                     or "/payment" in p.url.lower()):
                                 logger.info("[replay] 결제수단 페이지 감지 — 중단")
                                 break
-                            rr = p.evaluate(CLICK_PAY_JS)
-                            logger.info("[replay] 결제 진행 클릭 %d: %s", i + 1, rr)
-                            if not str(rr).startswith("ok"):
+                            top = p.evaluate(MARK_PAY_JS)
+                            if top is None:
+                                logger.info("[replay] 결제하기 버튼 없음 — 중단")
                                 break
+                            try:
+                                p.locator("[data-pay='1']").first.click(timeout=4000)
+                            except Exception:  # noqa: BLE001
+                                try:
+                                    p.locator("[data-pay='1']").first.click(force=True, timeout=3000)
+                                except Exception:  # noqa: BLE001
+                                    pass
+                            logger.info("[replay] 결제하기 실제클릭 %d @top%s", i + 1, top)
                         self._shot("payment")
                         logger.info("[replay] 결제(수단) 페이지 진입 — 좌석 선점 완료")
                         return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
