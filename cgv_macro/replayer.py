@@ -175,6 +175,13 @@ class Grabber:
         done = {"date": False, "showtime": False, "person": False, "seat": False}
         seat_str = ""
         try:
+            # 매 시도 깨끗한 상태에서 시작(극장별 예매). 극장은 프로필에 기억됨.
+            try:
+                if "movieBook/cinema" not in p.url:
+                    p.goto(CINEMA_URL, wait_until="domcontentloaded")
+                    p.wait_for_timeout(1500)
+            except Exception:  # noqa: BLE001
+                pass
             for i, step in enumerate(recipe.get("steps", [])):
                 kind = _classify(step)
                 txt = (step.get("txt") or "").strip()

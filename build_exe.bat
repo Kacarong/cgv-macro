@@ -1,8 +1,8 @@
 @echo off
 REM ============================================================
-REM  CGV Ticket Watcher - Windows exe build (double-click once)
-REM  Output: dist\CGV-Ticket-Watcher.exe  (single file, small)
-REM  Requires Python 3.10+ (check "Add Python to PATH" on install)
+REM  Build single exe (Windows). Output: dist\CGV-Seat-Watcher.exe
+REM  Uses the installed Chrome at runtime (no Chromium bundled) => small exe.
+REM  Requires Python 3.10+ (Add to PATH).
 REM ============================================================
 setlocal
 cd /d "%~dp0"
@@ -14,18 +14,19 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [1/3] Preparing virtual environment...
 if not exist ".venv\" python -m venv .venv
-call .venv\Scripts\activate.bat
-
-echo [2/3] Installing dependencies...
+call ".venv\Scripts\activate.bat"
 python -m pip install --upgrade pip
-pip install -r requirements.txt pyinstaller
+pip install pyyaml playwright pyinstaller
 
-echo [3/3] Building exe...
-pyinstaller --noconfirm --onefile --windowed --name CGV-Ticket-Watcher cgv_gui.py
+echo [build] running PyInstaller...
+pyinstaller --noconfirm --onefile --windowed --name CGV-Seat-Watcher ^
+  --collect-all playwright ^
+  --hidden-import cgv_macro.watcher --hidden-import cgv_macro.replayer ^
+  --hidden-import cgv_macro.recorder --hidden-import cgv_macro.cgv_api ^
+  app.py
 
 echo.
-echo   Done. Executable: dist\CGV-Ticket-Watcher.exe
-echo.
+echo   Done: dist\CGV-Seat-Watcher.exe
+echo   (Google Chrome must be installed on the PC.)
 pause
