@@ -62,9 +62,16 @@ class Grabber:
         except Exception:  # noqa: BLE001
             pass
 
-    def grab(self, movie: str, day: str, hhmm: str, count: int = 2,
-             prefer: str = "center", preferred: list[str] | None = None) -> tuple[bool, str, str]:
-        """day='2026-09-04'(일 숫자만 사용), hhmm='20:00'. 반환 (성공, 좌석문자열, 메시지)."""
+    def grab(self, movie: str, day: str, hhmm: str, persons: dict | None = None,
+             count: int = 2, prefer: str = "center",
+             preferred: list[str] | None = None) -> tuple[bool, str, str]:
+        """
+        day='2026-09-04'(일 숫자만 사용), hhmm='20:00'.
+        persons: {'일반':2,'청소년':1,'우대':0} 처럼 인원 구성. 없으면 {'일반': count}.
+        반환 (성공, 좌석문자열, 메시지).
+        """
+        persons = {k: int(v) for k, v in (persons or {"일반": count}).items() if int(v) > 0}
+        total = sum(persons.values()) or count
         preferred = [s.strip().upper() for s in (preferred or [])]
         p = self.page
         try:
@@ -118,11 +125,21 @@ class Grabber:
                 self._shot("login")
                 return False, "", "로그인 필요 — record.py 로 로그인해두세요"
 
-            # 3) 인원 — 일반 count 명(첫 그룹 count번째)
-            logger.info("[grab] 인원 일반 %d", count)
-            nums = p.locator("button.btn-num")
-            if nums.count() >= count:
-                nums.nth(count - 1).click(); p.wait_for_timeout(1200)
+            # 3) 인원 구성 — 각 유형(일반/청소년/우대…) 행에서 해당 인원수 버튼 클릭
+            pick_person_js = r"""(a)=>{const {label,n}=a;
+              const rows=[...document.querySelectorAll('*')].filter(e=>{
+                const t=e.textContent||'';
+                return t.includes(label) && e.querySelector('button.btn-num');});
+              rows.sort((x,y)=>(x.textContent||'').length-(y.textContent||'').length);
+              const row=rows[0]; if(!row) return 'no-row';
+              const b=[...row.querySelectorAll('button.btn-num')]
+                       .find(x=>(x.textContent||'').trim()===String(n));
+              if(!b) return 'no-btn'; b.scrollIntoView({block:'center'}); b.click(); return 'ok';
+            }"""
+            for label, n in persons.items():
+                r = p.evaluate(pick_person_js, {"label": label, "n": n})
+                logger.info("[grab] 인원 %s %d명 → %s", label, n, r)
+                p.wait_for_timeout(600)
 
             # 4) '선택'(좌석으로 진행) — '선택완료'와 구분 위해 정확 일치
             try:
@@ -132,10 +149,10 @@ class Grabber:
             p.wait_for_timeout(2000)
             self._shot("3person")
 
-            # 5) 좌석 — 빈자리 count개 선택(가운데 우선 / 선호좌석 우선)
+            # 5) 좌석 — 그 관의 '빈자리' total개 선택(관 배치 무관, 실시간 탐색)
             seats = p.locator(SEL_SEAT_OK)
             sn = seats.count()
-            logger.info("[grab] 빈 좌석 %d개", sn)
+            logger.info("[grab] 빈 좌석 %d개 (필요 %d)", sn, total)
             if sn == 0:
                 self._shot("4seat"); return False, "", "빈 좌석 없음"
 
@@ -148,15 +165,15 @@ class Grabber:
                 for lb, idx in labels:
                     if lb in preferred:
                         chosen.append(idx)
-            if len(chosen) < count:
+            if len(chosen) < total:
                 pool = [idx for _, idx in labels if idx not in chosen]
                 if prefer == "back":
                     pool = list(reversed(pool))
                 elif prefer == "center":
                     mid = len(pool) // 2
                     pool = sorted(pool, key=lambda x: abs(pool.index(x) - mid))
-                chosen.extend(pool[: count - len(chosen)])
-            chosen = chosen[:count]
+                chosen.extend(pool[: total - len(chosen)])
+            chosen = chosen[:total]
 
             picked = []
             for idx in chosen:
@@ -165,15 +182,24 @@ class Grabber:
                 el.click(); p.wait_for_timeout(400)
             seat_str = ", ".join([x for x in picked if x]) or f"{len(chosen)}석"
 
-            # 6) 선택완료(홀드) — 결제는 안 함
+            # 6) 선택완료
             try:
                 p.get_by_role("button", name="선택완료").first.click(timeout=5000)
             except Exception:  # noqa: BLE001
                 p.locator("button:has-text('선택완료')").first.click()
-            p.wait_for_timeout(1500)
+            p.wait_for_timeout(1800)
             self._shot("5done")
-            logger.info("[grab] 좌석 홀드 완료: %s", seat_str)
-            return True, seat_str, "좌석 홀드 완료(결제 전). 빨리 결제하세요."
+
+            # 7) 결제하기 — 결제 '페이지'까지 진입해야 좌석이 선점(잠김)됨. 실제 결제는 사용자가.
+            try:
+                p.get_by_role("button", name="결제하기").first.click(timeout=6000)
+                p.wait_for_timeout(2500)
+                logger.info("[grab] 결제 페이지 진입 — 좌석 선점됨")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[grab] 결제하기 클릭 실패(좌석은 선택됨): %s", e)
+            self._shot("6payment")
+            logger.info("[grab] 좌석 선점 완료: %s", seat_str)
+            return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
         except Exception as e:  # noqa: BLE001
             self._shot("error")
             logger.error("[grab] 실패: %s", e)

@@ -20,15 +20,23 @@ def main() -> int:
     movie = input("영화명 [기본: 오디세이]: ").strip() or "오디세이"
     day = input("날짜 YYYY-MM-DD (예: 2026-09-04): ").strip()
     hhmm = input("회차 시간 HH:MM (예: 20:00): ").strip()
-    try:
-        count = int(input("좌석 수 [기본 2]: ").strip() or "2")
-    except ValueError:
-        count = 2
+
+    def _num(prompt, default=0):
+        try:
+            return int(input(prompt).strip() or str(default))
+        except ValueError:
+            return default
+    print("인원 구성(0이면 없음):")
+    persons = {
+        "일반": _num("  일반(성인) 수 [기본 2]: ", 2),
+        "청소년": _num("  청소년 수 [기본 0]: ", 0),
+        "우대": _num("  우대 수 [기본 0]: ", 0),
+    }
     prefer = input("좌석 위치 center/front/back/any [기본 center]: ").strip() or "center"
 
     g = Grabber(headless=False).__enter__()
     try:
-        ok, seat, msg = g.grab(movie=movie, day=day, hhmm=hhmm, count=count, prefer=prefer)
+        ok, seat, msg = g.grab(movie=movie, day=day, hhmm=hhmm, persons=persons, prefer=prefer)
         print(f"\n결과: {'성공' if ok else '실패'} | 좌석: {seat} | {msg}")
         if ok:
             print("→ 브라우저에 좌석이 홀드됐습니다. 결제는 직접 하세요(약 10분 안).")
