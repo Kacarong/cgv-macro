@@ -25,6 +25,8 @@ from cgv_macro import paths
 PROFILE = os.path.join(paths.data_dir(), "chrome-profile")
 RECIPE = os.path.join(paths.data_dir(), "recipe.json")
 START_URL = "https://cgv.co.kr/cnm/movieBook/cinema"
+# 로그인 화면을 먼저 띄운다. 로그인하면 returnUrl 로 자동 이동(극장별 예매).
+LOGIN_URL = "https://cgv.co.kr/mem/login?returnUrl=%2Fcnm%2FmovieBook%2Fcinema"
 
 # 모든 프레임에서 클릭을 항상 window.__rec 로 넘긴다(녹화 여부는 파이썬이 판단).
 INIT = r"""
@@ -82,15 +84,15 @@ def main() -> int:
             except Exception:  # noqa: BLE001
                 pass
         try:
-            page.goto(START_URL, wait_until="domcontentloaded")
+            page.goto(LOGIN_URL, wait_until="domcontentloaded")
             page.wait_for_timeout(1500)
         except Exception:  # noqa: BLE001
             pass
         page.bring_to_front()
 
-        print("\n[record] 1) 열린 크롬에서 CGV 로그인(이미 돼 있으면 통과).")
-        print("[record]    화면은 '극장별 예매'가 떠 있으면 좋아요(아니어도 됨).")
-        input("[record]    준비됐으면 Enter → 여기서부터 '녹화 시작' ")
+        print("\n[record] 1) 열린 크롬의 '로그인' 화면에서 CGV 에 로그인하세요.")
+        print("[record]    로그인하면 자동으로 '극장별 예매' 화면으로 넘어갑니다(이미 로그인돼 있으면 바로 이동).")
+        input("[record] 2) 극장별 예매 화면이 뜨면 Enter → 여기서부터 '녹화 시작' ")
 
         state["recording"] = True
         print("[record] ▶ 녹화 시작! 클릭할 때마다 아래에 [01],[02]... 가 찍혀야 정상입니다.")
