@@ -56,6 +56,7 @@ class App(ctk.CTk):
         self.watch_stop = threading.Event()
         self.watcher = None
 
+        self.target_list: list[dict] = []      # 감시 대상 목록(여러 개)
         self.movies: dict[str, str] = {}      # name -> movNo
         self.theaters: dict[str, tuple] = {}   # name -> (siteNo, region)
         self.dates = _gen_dates()
@@ -188,6 +189,16 @@ class App(ctk.CTk):
         self.e_ment = ctk.CTkEntry(drow, placeholder_text="멘션 ID", width=140, fg_color="#2A2A30")
         self.e_ment.pack(side="left")
 
+        # === 대상 목록 (여러 개) ===
+        lc = self._card(main, "감시 대상 목록 (여러 개 등록 → 동시 감시)")
+        addrow = ctk.CTkFrame(lc, fg_color=PANEL); addrow.pack(fill="x", padx=16, pady=(4, 4))
+        ctk.CTkButton(addrow, text="＋ 현재 설정을 목록에 추가", fg_color=RED, hover_color=RED_DK,
+                      command=self._add_target).pack(side="left")
+        ctk.CTkButton(addrow, text="목록 비우기", fg_color="#33333A", hover_color="#44444C",
+                      command=self._clear_list).pack(side="left", padx=8)
+        self.list_frame = ctk.CTkScrollableFrame(lc, fg_color="#141417", height=120)
+        self.list_frame.pack(fill="x", padx=16, pady=(2, 12))
+
         # === 감시 탭: 감시 시작/중지 ===
         ac = self._card(main, "감시")
         r2 = ctk.CTkFrame(ac, fg_color=PANEL); r2.pack(fill="x", padx=16, pady=(4, 12))
@@ -315,12 +326,51 @@ class App(ctk.CTk):
         }
 
     def _save(self):
-        save_cfg(self._target()); self._put("설정 저장됨.")
+        c = self._target(); c["targets"] = self.target_list
+        save_cfg(c); self._put("설정 저장됨.")
+
+    # ---------- 대상 목록 ----------
+    def _add_target(self):
+        t = self._target()
+        if not t["date"]:
+            self._put("날짜를 선택하고 추가하세요."); return
+        if len(self.target_list) >= 8:
+            self._put("대상은 최대 8개까지."); return
+        self.target_list.append(t)
+        self._refresh_list()
+        self._save()
+        self._put(f"목록 추가: {t['movie']} / {t['theater']} / {t['date']} {t['time'] or '(전체)'}")
+
+    def _remove_target(self, idx):
+        if 0 <= idx < len(self.target_list):
+            del self.target_list[idx]; self._refresh_list(); self._save()
+
+    def _clear_list(self):
+        self.target_list = []; self._refresh_list(); self._save()
+
+    def _refresh_list(self):
+        for w in self.list_frame.winfo_children():
+            w.destroy()
+        if not self.target_list:
+            ctk.CTkLabel(self.list_frame, text="(비어있음 — 현재 설정을 추가하거나, 목록이 비면 위 설정 1개로 감시)",
+                         text_color=SUB).pack(anchor="w", padx=6, pady=6)
+            return
+        for i, t in enumerate(self.target_list):
+            row = ctk.CTkFrame(self.list_frame, fg_color="#1E1E22", corner_radius=8)
+            row.pack(fill="x", padx=4, pady=3)
+            seats = (" · " + ",".join(t.get("preferred") or [])) if t.get("preferred") else ""
+            txt = (f"{i+1}. {t['movie']} · {t['theater']} · {t['date']} · "
+                   f"{t['time'] or '전체'}{seats}")
+            ctk.CTkLabel(row, text=txt, text_color="white").pack(side="left", padx=10, pady=6)
+            ctk.CTkButton(row, text="삭제", width=48, fg_color="#3A2A2A", hover_color=RED,
+                          command=lambda idx=i: self._remove_target(idx)).pack(side="right", padx=6)
 
     def _load(self):
         c = load_cfg()
         if not c:
-            return
+            self._refresh_list(); return
+        self.target_list = c.get("targets", []) or []
+        self._refresh_list()
         if c.get("mode"):
             self.mode.set(c["mode"])
         if c.get("date_label") in self.date_map:
@@ -346,18 +396,20 @@ class App(ctk.CTk):
         if not os.path.exists(RECIPE):
             self._put("먼저 '녹화 시작하기'로 예매 흐름을 1회 녹화하세요."); return
         t = self._target()
-        if not t["date"]:
-            self._put("날짜를 선택하세요."); return
-        if t["mode"] == "취소표 감지" and not t["time"]:
-            self._put("취소표 감지는 '회차(시간)'를 선택해야 합니다. (회차 불러오기 후 선택)"); return
-        save_cfg(t)
+        targets = list(self.target_list) if self.target_list else [t]
+        for tt in targets:
+            if not tt.get("date"):
+                self._put("모든 대상에 날짜가 필요합니다."); return
+            if tt.get("mode") == "취소표 감지" and not tt.get("time"):
+                self._put(f"취소표 감지 대상은 회차(시간) 선택 필요: {tt.get('movie')}"); return
+        self._save()
         recipe = json.load(open(RECIPE, encoding="utf-8"))
         notifier = None
         if t["webhook"]:
             from cgv_macro.notifier import DiscordNotifier
             notifier = DiscordNotifier(t["webhook"], t["mention"])
-        from cgv_macro.watcher import Watcher
-        self.watcher = Watcher(recipe, t, notifier)
+        from cgv_macro.watcher import MultiWatcher
+        self.watcher = MultiWatcher(recipe, targets, notifier)
         self.watch_stop.clear()
 
         def worker():
