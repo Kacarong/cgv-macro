@@ -256,13 +256,14 @@ class App(ctk.CTk):
         self.e_ment = ctk.CTkEntry(drow, placeholder_text="멘션 ID", width=140, fg_color="#2A2A30")
         self.e_ment.pack(side="left")
 
-        self._note(sett, "권장 사용법: 프로그램을 켜면 하단 '① 로그인 준비'로 크롬을 띄워 1회 로그인하고 그 창을 그대로 두세요.\n"
-                         "그 크롬 1개를 계속 재사용하므로 캡챠·재로그인이 필요 없습니다. '중지'해도 크롬은 로그인된 채 열려 있고,\n"
-                         "프로그램을 완전히 닫을 때만 크롬이 닫힙니다. 모든 감시(취소표/오픈/무대인사)가 이 크롬 1개를 공유합니다.\n"
+        self._note(sett, "권장 사용법: '① 로그인 준비'로 크롬을 띄워 1회 로그인하고 그 창을 그대로 두세요. 크롬 1개를 계속\n"
+                         "재사용하므로 재로그인이 거의 필요 없습니다. '중지'해도 크롬은 로그인된 채 유지, 프로그램 종료 때만 닫힙니다.\n"
                          "\n"
-                         "동시 선점: 하나를 잡아도 감시는 멈추지 않고 계속됩니다. 잡을 때마다 '새 탭'을 열어 각 결제창을\n"
-                         "동시에 유지하므로(최대 5개), 여러 개를 함께 노려 각각 결제할 수 있습니다. 다만 CGV가 한 계정으로\n"
-                         "동시 예매를 제한하면 나중 것이 앞 것을 밀어낼 수 있어요 — 실제로 한 번 겪어보고 알려주시면 조정할게요.")
+                         "★24시간 무인 운용: 로그인 화면에 '로그인 유지/자동로그인'이 있으면 꼭 체크하세요(세션이 며칠 유지됨).\n"
+                         "앱이 3분마다 CGV에 접속해 세션을 살려두고(keep-alive), 만약 풀리면 로그·디스코드로 '로그인 필요' 알림을 줍니다.\n"
+                         "\n"
+                         "동시 선점: 하나를 잡아도 감시는 계속되고, 잡을 때마다 '새 탭'으로 서로 다른 회차의 결제창을 동시에\n"
+                         "유지합니다(최대 5개). 다만 CGV가 한 계정 동시 예매를 막으면 나중 것이 앞 것을 밀어낼 수 있어요(그땐 계정 분리 필요).")
 
     # ---------- 데이터 로드 ----------
     def _load_lists(self):
@@ -470,7 +471,8 @@ class App(ctk.CTk):
         from cgv_macro.hub import WatchHub
         if self.hub is None:
             self.hub = WatchHub()
-        self._put("[로그인] 크롬을 띄웁니다. 로그인 완료 후 창은 그대로 두세요(세션 유지).")
+        self._put("[로그인] 크롬을 띄웁니다. ★로그인 화면에 '로그인 유지/자동로그인'이 있으면 꼭 체크하세요"
+                  " (24시간 무인 운용의 핵심 — 세션이 며칠 유지됩니다). 로그인 후 창은 그대로 두세요.")
 
         def worker():
             try:
@@ -493,13 +495,14 @@ class App(ctk.CTk):
             self.stat.configure(text="● 대기", text_color=SUB)
 
     def _login_watchdog(self):
-        if self._active > 0 and self.hub and self.hub.logged_in and not self.hub.held.is_set():
+        # 로그인돼 있으면 감시 중이 아니어도 주기적으로 세션을 살려둔다(유휴 만료 방지 + 로그아웃 감지).
+        if self.hub and self.hub.logged_in and not self.hub.held.is_set():
             def w():
                 ok = self.hub.recheck_login(self._put, self._notifier)
                 if not ok:
                     self.after(0, lambda: self.stat.configure(text="● 로그인 필요", text_color=RED))
             threading.Thread(target=w, daemon=True).start()
-        self.after(300000, self._login_watchdog)
+        self.after(180000, self._login_watchdog)   # 3분마다 keep-alive
 
     # ---------- 감시 ----------
     def _watch_start(self):
