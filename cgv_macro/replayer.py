@@ -148,6 +148,24 @@ class Grabber:
         pg.set_default_timeout(9000)
         return pg
 
+    def new_window(self, idx: int = 0):
+        """별도 '창'(팝업)을 연다. 같은 컨텍스트라 로그인 세션을 공유하면서도
+        탭이 아닌 독립 창으로 떠서 여러 개를 한눈에 볼 수 있다. 팝업 차단 시 탭으로 폴백."""
+        left = 30 + (idx % 4) * 90 + (idx // 4) * 20
+        top = 30 + (idx % 4) * 70
+        feats = f"popup=yes,width=1180,height=860,left={left},top={top}"
+        try:
+            with self._ctx.expect_page(timeout=8000) as info:
+                self.page.evaluate("(f)=>window.open('about:blank','_blank',f)", feats)
+            pg = info.value
+        except Exception:  # noqa: BLE001
+            pg = self._ctx.new_page()   # 팝업이 막히면 탭으로라도 진행
+        try:
+            pg.set_default_timeout(9000)
+        except Exception:  # noqa: BLE001
+            pass
+        return pg
+
     def close(self) -> None:
         try:
             if self._ctx:

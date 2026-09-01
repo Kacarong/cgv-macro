@@ -34,7 +34,9 @@ class WatchHub:
         self._holds_lock = threading.Lock()
         self.holds = 0                      # 현재 선점(결제창 대기)한 탭 수
         self.max_holds = 5
-        self._pages: dict = {}              # 대상키 -> 탭(닫지 않고 재사용 → 껐다켰다 방지)
+        self._pages: dict = {}              # 대상키 -> 창(닫지 않고 재사용 → 껐다켰다 방지)
+        self._slots: dict = {}              # 대상키 -> 창 위치 슬롯
+        self._next_slot = 0
 
     # ---- 브라우저 전용 스레드 ----
     def _loop(self) -> None:
@@ -106,7 +108,13 @@ class WatchHub:
                     except Exception:  # noqa: BLE001
                         page = None
             if page is None:
-                page = g.new_page()
+                slot = self._slots.get(key)
+                if slot is None:
+                    slot = self._next_slot
+                    self._next_slot += 1
+                    if key is not None:
+                        self._slots[key] = slot
+                page = g.new_window(slot)   # 대상마다 '별도 창'
                 if key is not None:
                     self._pages[key] = page
             try:
