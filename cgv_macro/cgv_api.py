@@ -67,6 +67,24 @@ class Showtime:
         return f"{self.time}|{self.scns_no}|{self.schedule_id}"
 
 
+# 무대인사류 이벤트 키워드(회차 raw의 어떤 문자열 필드에든 이 말이 있으면 이벤트로 간주).
+# CGV가 필드명을 바꿔도 견디도록 값 자체를 스캔한다.
+STAGE_EVENT_KEYWORDS = (
+    "무대인사", "무대 인사", "관객과의 대화", "관객과의대화",
+    "내한", "라이브톡", "라이브 톡", "GV", "화상 인사", "화상인사",
+)
+
+
+def stage_event_label(raw: dict[str, Any], keywords: tuple[str, ...] = STAGE_EVENT_KEYWORDS) -> str:
+    """회차 raw dict의 문자열 값들을 훑어 무대인사류 키워드가 있으면 그 값을 반환. 없으면 ''."""
+    for v in raw.values():
+        if isinstance(v, str) and v:
+            for kw in keywords:
+                if kw in v:
+                    return v.strip()
+    return ""
+
+
 def _norm_time(hhmm: str) -> str:
     s = "".join(ch for ch in str(hhmm) if ch.isdigit())
     if len(s) >= 4:

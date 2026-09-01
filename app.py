@@ -57,6 +57,7 @@ class App(ctk.CTk):
         self.watcher = None
 
         self.target_list: list[dict] = []      # 감시 대상 목록(여러 개)
+        self.event_theaters: list[str] = []    # 무대인사 감지 극장(이름)
         self.movies: dict[str, str] = {}      # name -> movNo
         self.theaters: dict[str, tuple] = {}   # name -> (siteNo, region)
         self.dates = _gen_dates()
@@ -123,7 +124,7 @@ class App(ctk.CTk):
         # 모드
         mc = self._card(main)
         self.mode = ctk.CTkSegmentedButton(
-            mc, values=["취소표 감지", "상영 오픈 감지"], selected_color=RED,
+            mc, values=["취소표 감지", "상영 오픈 감지", "무대인사 감지"], selected_color=RED,
             selected_hover_color=RED_DK, font=ctk.CTkFont(size=13, weight="bold"),
             command=lambda _v: None)
         self.mode.set("취소표 감지")
@@ -188,6 +189,21 @@ class App(ctk.CTk):
         self.dd_int = ctk.CTkOptionMenu(srow, values=["5", "10", "15", "30", "60"], width=70,
                                         fg_color="#2A2A30", button_color=RED, button_hover_color=RED_DK)
         self.dd_int.set("10"); self.dd_int.pack(side="left")
+
+        # === 무대인사 감지 극장 (모드 '무대인사 감지'에서 사용) ===
+        ec = self._card(main, "무대인사 감지 극장 (선택 극장의 상영중 전체영화를 자동 감지 → 즉시 좌석잡기)")
+        erow = ctk.CTkFrame(ec, fg_color=PANEL); erow.pack(fill="x", padx=16, pady=(4, 4))
+        ctk.CTkButton(erow, text="＋ 위 '극장' 추가", fg_color=RED, hover_color=RED_DK,
+                      command=self._add_event_theater).pack(side="left")
+        ctk.CTkButton(erow, text="비우기", fg_color="#33333A", hover_color="#44444C",
+                      command=self._clear_event_theaters).pack(side="left", padx=8)
+        ctk.CTkLabel(erow, text="날짜범위", text_color=SUB).pack(side="left", padx=(12, 3))
+        self.dd_days = ctk.CTkOptionMenu(erow, values=["3", "7", "14"], width=70, fg_color="#2A2A30",
+                                         button_color=RED, button_hover_color=RED_DK)
+        self.dd_days.set("7"); self.dd_days.pack(side="left")
+        self.ev_lbl = ctk.CTkLabel(ec, text="(선택된 극장 없음)", text_color=SUB,
+                                   wraplength=700, justify="left")
+        self.ev_lbl.pack(anchor="w", padx=16, pady=(2, 12))
 
         # === 설정 탭: 녹화 + 디스코드 ===
         rc = self._card(sett, "녹화 (최초 1회 · 로그인 + 예매 클릭 기록)")
@@ -331,7 +347,25 @@ class App(ctk.CTk):
 
     def _save(self):
         c = self._target(); c["targets"] = self.target_list
+        c["event_theaters"] = self.event_theaters
+        c["days"] = int(self.dd_days.get())
         save_cfg(c); self._put("설정 저장됨.")
+
+    # ---------- 무대인사 감지 극장 ----------
+    def _add_event_theater(self):
+        nm = self.dd_theater.get()
+        if nm in ("불러오는 중…", "(없음)", ""):
+            self._put("극장 목록이 로드된 뒤 '극장'을 고르고 추가하세요."); return
+        if nm not in self.event_theaters:
+            self.event_theaters.append(nm); self._refresh_event_theaters(); self._save()
+            self._put(f"무대인사 감지 극장 추가: {nm}")
+
+    def _clear_event_theaters(self):
+        self.event_theaters = []; self._refresh_event_theaters(); self._save()
+
+    def _refresh_event_theaters(self):
+        txt = ("· " + ",  ".join(self.event_theaters)) if self.event_theaters else "(선택된 극장 없음)"
+        self.ev_lbl.configure(text=txt)
 
     # ---------- 대상 목록 ----------
     def _add_target(self):
@@ -375,6 +409,10 @@ class App(ctk.CTk):
             self._refresh_list(); return
         self.target_list = c.get("targets", []) or []
         self._refresh_list()
+        self.event_theaters = c.get("event_theaters", []) or []
+        self._refresh_event_theaters()
+        if c.get("days"):
+            self.dd_days.set(str(c.get("days")))
         if c.get("mode"):
             self.mode.set(c["mode"])
         if c.get("date_label") in self.date_map:
@@ -400,19 +438,29 @@ class App(ctk.CTk):
         if not os.path.exists(RECIPE):
             self._put("먼저 '녹화 시작하기'로 예매 흐름을 1회 녹화하세요."); return
         t = self._target()
-        targets = list(self.target_list) if self.target_list else [t]
-        for tt in targets:
-            if not tt.get("date"):
-                self._put("모든 대상에 날짜가 필요합니다."); return
-        self._save()
-        self._put(f"감시 준비 — 대상 {len(targets)}개. 크롬 로그인 창을 확인하세요…")
         recipe = json.load(open(RECIPE, encoding="utf-8"))
         notifier = None
         if t["webhook"]:
             from cgv_macro.notifier import DiscordNotifier
             notifier = DiscordNotifier(t["webhook"], t["mention"])
-        from cgv_macro.watcher import MultiWatcher
-        self.watcher = MultiWatcher(recipe, targets, notifier)
+
+        if self.mode.get() == "무대인사 감지":
+            ths = [(self.theaters[nm][0], nm) for nm in self.event_theaters if nm in self.theaters]
+            if not ths:
+                self._put("무대인사 감지할 극장을 1곳 이상 추가하세요."); return
+            self._save()
+            self._put(f"무대인사 감지 준비 — 극장 {len(ths)}곳. 크롬 로그인 창을 확인하세요…")
+            from cgv_macro.event_watch import EventWatcher
+            self.watcher = EventWatcher(recipe, ths, t, notifier, days=int(self.dd_days.get()))
+        else:
+            targets = list(self.target_list) if self.target_list else [t]
+            for tt in targets:
+                if not tt.get("date"):
+                    self._put("모든 대상에 날짜가 필요합니다."); return
+            self._save()
+            self._put(f"감시 준비 — 대상 {len(targets)}개. 크롬 로그인 창을 확인하세요…")
+            from cgv_macro.watcher import MultiWatcher
+            self.watcher = MultiWatcher(recipe, targets, notifier)
         self.watch_stop.clear()
 
         def worker():

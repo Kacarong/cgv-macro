@@ -16,6 +16,7 @@ _COLOR = {
     "available": 0x2ECC71,   # 초록: 잔여석
     "cancel": 0xF1C40F,      # 노랑: 취소표(매진→잔여)
     "seat_held": 0x9B59B6,   # 보라: 좌석 자동선택 완료
+    "stage_event": 0xE67E22, # 주황: 무대인사/GV 감지
     "error": 0xE74C3C,       # 빨강: 에러
 }
 
@@ -95,6 +96,7 @@ class DiscordNotifier:
             "available": "🟢 잔여석 발생",
             "cancel": "🎟️ 취소표 발생 (매진→잔여)",
             "seat_held": "🪑 좌석 자동 선택 완료 — 결제만 하면 됩니다",
+            "stage_event": "🎤 무대인사/GV 감지",
         }.get(kind, "CGV 알림")
 
         fields = [
