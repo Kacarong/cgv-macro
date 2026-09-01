@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -69,19 +70,30 @@ class Showtime:
 
 # 무대인사류 이벤트 키워드(회차 raw의 어떤 문자열 필드에든 이 말이 있으면 이벤트로 간주).
 # CGV가 필드명을 바꿔도 견디도록 값 자체를 스캔한다.
+# 주의: 'GV'는 극장명 'CGV 센텀시티'에 들어가므로 단어경계 정규식으로만 매칭(아래 _GV_RE).
 STAGE_EVENT_KEYWORDS = (
     "무대인사", "무대 인사", "관객과의 대화", "관객과의대화",
-    "내한", "라이브톡", "라이브 톡", "GV", "화상 인사", "화상인사",
+    "내한", "라이브톡", "라이브 톡", "화상 인사", "화상인사",
+    "GV상영", "GV 상영", "싸인회", "사인회",
 )
+# 'GV'가 독립 토큰일 때만(예: '관객과의 대화(GV)'). 'CGV'는 C-G 사이에 경계가 없어 매칭 안 됨.
+_GV_RE = re.compile(r"\bGV\b")
+# 극장명(CGV ...)처럼 이벤트가 아닌데 걸리기 쉬운 값은 제외.
+_NON_EVENT_RE = re.compile(r"CGV|씨네드쉐프|씨넬리브러리")
 
 
 def stage_event_label(raw: dict[str, Any], keywords: tuple[str, ...] = STAGE_EVENT_KEYWORDS) -> str:
     """회차 raw dict의 문자열 값들을 훑어 무대인사류 키워드가 있으면 그 값을 반환. 없으면 ''."""
     for v in raw.values():
-        if isinstance(v, str) and v:
-            for kw in keywords:
-                if kw in v:
-                    return v.strip()
+        if not isinstance(v, str) or not v:
+            continue
+        if _NON_EVENT_RE.search(v):
+            continue  # 극장명 등 오탐 소스 제외
+        if _GV_RE.search(v):
+            return v.strip()
+        for kw in keywords:
+            if kw in v:
+                return v.strip()
     return ""
 
 

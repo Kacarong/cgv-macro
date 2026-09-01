@@ -87,12 +87,26 @@ class WatchHub:
         return ok
 
     def grab(self, recipe, day, hhmm, movie, persons, preferred, only, prefer):
-        """새 탭에서 좌석 선점을 끝까지 진행. (ok, seat, msg) 반환."""
+        """새 탭에서 좌석 선점을 끝까지 진행. 성공하면 탭 유지(결제창), 실패하면 탭 닫음.
+        (ok, seat, msg) 반환."""
         def job():
             g = self._ensure_grabber()
             page = g.new_page()
-            return g.replay(recipe, day=day, hhmm=hhmm, movie=movie, persons=persons,
-                            preferred=preferred, only_preferred=only, prefer=prefer, page=page)
+            try:
+                ok, seat, msg = g.replay(recipe, day=day, hhmm=hhmm, movie=movie, persons=persons,
+                                         preferred=preferred, only_preferred=only, prefer=prefer, page=page)
+            except Exception:
+                try:
+                    page.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
+            if not ok:
+                try:
+                    page.close()   # 실패 탭은 닫아 누적 방지
+                except Exception:  # noqa: BLE001
+                    pass
+            return ok, seat, msg
         return self._submit(job)
 
     def recheck_login(self, log=None, notifier=None) -> bool:
