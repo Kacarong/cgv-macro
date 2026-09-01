@@ -34,6 +34,7 @@ class WatchHub:
         self._holds_lock = threading.Lock()
         self.holds = 0                      # 현재 선점(결제창 대기)한 탭 수
         self.max_holds = 5
+        self._pages: dict = {}              # 대상키 -> 탭(닫지 않고 재사용 → 껐다켰다 방지)
 
     # ---- 브라우저 전용 스레드 ----
     def _loop(self) -> None:
@@ -86,28 +87,52 @@ class WatchHub:
                 log("[브라우저] 로그인 확인 완료 — 세션 유지됨")
         return ok
 
-    def grab(self, recipe, day, hhmm, movie, persons, preferred, only, prefer):
-        """새 탭에서 좌석 선점을 끝까지 진행. 성공하면 탭 유지(결제창), 실패하면 탭 닫음.
+    # 하드 실패(그 회차 자체가 없음/진입 불가) → 탭 닫고 재사용 안 함.
+    _HARD_FAIL = ("못 찾음", "전환 안", "재생 오류", "없습니다", "비어있습니다")
+
+    def grab(self, recipe, day, hhmm, movie, persons, preferred, only, prefer, key=None):
+        """좌석 선점 시도. key가 있으면 그 대상 전용 탭을 계속 재사용(껐다켰다 방지).
+        성공→탭 유지(결제창), 소프트실패(좌석 대기)→탭 유지 재확인, 하드실패→탭 닫음.
         (ok, seat, msg) 반환."""
         def job():
             g = self._ensure_grabber()
-            page = g.new_page()
+            page = None
+            if key is not None:
+                page = self._pages.get(key)
+                if page is not None:
+                    try:
+                        if page.is_closed():
+                            page = None
+                    except Exception:  # noqa: BLE001
+                        page = None
+            if page is None:
+                page = g.new_page()
+                if key is not None:
+                    self._pages[key] = page
             try:
                 ok, seat, msg = g.replay(recipe, day=day, hhmm=hhmm, movie=movie, persons=persons,
                                          preferred=preferred, only_preferred=only, prefer=prefer, page=page)
             except Exception:
-                try:
-                    page.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                self._drop_page(key, page)
                 raise
-            if not ok:
-                try:
-                    page.close()   # 실패 탭은 닫아 누적 방지
-                except Exception:  # noqa: BLE001
-                    pass
+            if ok:
+                if key is not None:
+                    self._pages.pop(key, None)   # 결제창은 별도 유지(재사용 목록에서 제외)
+            else:
+                hard = (key is None) or any(h in (msg or "") for h in self._HARD_FAIL)
+                if hard:
+                    self._drop_page(key, page)
+                # 소프트 실패(원하는 좌석 대기 등): 탭 유지 → 다음 사이클 같은 탭에서 재확인
             return ok, seat, msg
         return self._submit(job)
+
+    def _drop_page(self, key, page):
+        try:
+            page.close()
+        except Exception:  # noqa: BLE001
+            pass
+        if key is not None:
+            self._pages.pop(key, None)
 
     def keepalive(self) -> None:
         """세션 유휴 만료 방지 — 컨트롤 탭을 예매 페이지로 새로고침(활동 신호)."""

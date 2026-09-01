@@ -149,13 +149,16 @@ class MultiWatcher:
                 log(f"[감시] '{t.get('movie')}/{t.get('theater')}' 해석 실패: {e}")
                 continue
             persons = {k: int(v) for k, v in (t.get("persons") or {"일반": 2}).items() if int(v) > 0}
+            ymd = _scnymd(t.get("date", ""))
+            tm = (t.get("time") or "").strip()
+            scr = (t.get("screen_type") or "").strip()
             specs.append({
                 "t": t, "mov_no": mov_no, "mov_nm": mov_nm, "site_no": site_no, "site_nm": site_nm,
-                "ymd": _scnymd(t.get("date", "")), "time": (t.get("time") or "").strip(),
-                "screen": (t.get("screen_type") or "").strip(),
+                "ymd": ymd, "time": tm, "screen": scr,
                 "persons": persons, "need": sum(persons.values()) or 1,
                 "preferred": t.get("preferred") or [], "only": bool(t.get("only_preferred")),
                 "prefer": t.get("prefer", "center"),
+                "key": f"{mov_no}|{site_no}|{ymd}|{tm}|{scr}",   # 대상 전용 탭 키
             })
         if not specs:
             log("[감시] 유효한 대상이 없습니다."); return
@@ -207,7 +210,8 @@ class MultiWatcher:
                     if self.hub is not None:
                         ok, seat, msg = self.hub.grab(
                             self.recipe, sp["t"].get("date", ""), s.time, sp["mov_nm"],
-                            sp["persons"], sp["preferred"], sp["only"], sp["prefer"])
+                            sp["persons"], sp["preferred"], sp["only"], sp["prefer"],
+                            key=sp["key"])
                     else:
                         ok, seat, msg = self.grabber.replay(
                             self.recipe, day=sp["t"].get("date", ""), hhmm=s.time, movie=sp["mov_nm"],
