@@ -14,25 +14,31 @@ from __future__ import annotations
 import logging
 import random
 import time
+from contextlib import nullcontext
 from datetime import date, timedelta
 
 from . import cgv_api
 from .replayer import Grabber
 
 logger = logging.getLogger("cgv_macro")
+_NULL_LOCK = nullcontext()
 
 
 class EventWatcher:
     def __init__(self, recipe: dict, theaters: list[tuple[str, str]],
-                 base: dict, notifier=None, days: int = 7) -> None:
+                 base: dict, notifier=None, days: int = 7, hub=None) -> None:
         # theaters: [(siteNo, siteNm), ...]
         self.recipe = recipe
         self.theaters = theaters
         self.base = base or {}
         self.notifier = notifier
         self.days = max(1, min(int(days), 21))
+        self.hub = hub
         self.grabber: Grabber | None = None
         self.seen: set[str] = set()
+
+    def _held(self) -> bool:
+        return self.hub is not None and self.hub.held.is_set()
 
     def run(self, stop_event, log=None) -> None:
         log = log or logger.info
@@ -52,14 +58,20 @@ class EventWatcher:
         log(f"[무대인사] 감지 시작 — 극장 {len(self.theaters)}곳({th_names}) × 향후 {self.days}일 "
             f"× 상영중 전체영화 (주기 {interval}s, 좌석 {need}석)")
 
-        self.grabber = Grabber(headless=False).__enter__()
-        log("[무대인사] 크롬에 로그인하세요(이미 되어있으면 자동 통과)...")
-        if not self.grabber.ensure_login(timeout_s=600):
-            log("[무대인사] 로그인 실패 — 중지")
-            return
+        if self.hub is not None:
+            self.grabber = self.hub.grabber(log)
+            if not self.hub.ensure_login(log):
+                log("[무대인사] 로그인 실패 — 중지")
+                return
+        else:
+            self.grabber = Grabber(headless=False).__enter__()
+            log("[무대인사] 크롬에 로그인하세요(이미 되어있으면 자동 통과)...")
+            if not self.grabber.ensure_login(timeout_s=600):
+                log("[무대인사] 로그인 실패 — 중지")
+                return
         log("[무대인사] 로그인 확인 → 감시 시작")
 
-        while not stop_event.is_set():
+        while not stop_event.is_set() and not self._held():
             try:
                 movies = cgv_api.list_movies()  # 매 사이클 최신화(개봉 전 신규 자동 포착)
             except Exception as e:  # noqa: BLE001
@@ -79,7 +91,7 @@ class EventWatcher:
             disp = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"
             for site_no, site_nm in self.theaters:
                 for mov_no, mov_nm in movies:
-                    if stop_event.is_set():
+                    if stop_event.is_set() or self._held():
                         return False
                     try:
                         shows = cgv_api.fetch_showtimes(mov_no, site_no, ymd)
@@ -103,11 +115,17 @@ class EventWatcher:
                         # 자동 좌석 잡기(잔여석 미상(-1)이거나 충분할 때 시도)
                         if s.remaining < 0 or s.remaining >= need:
                             log(f"[무대인사] 좌석 잡기 시도: {mov_nm} {s.time}")
-                            ok, seat, msg = self.grabber.replay(
-                                self.recipe, day=disp, hhmm=s.time, movie=mov_nm,
-                                persons=persons, preferred=preferred,
-                                only_preferred=only, prefer=prefer)
+                            lock = self.hub.book_lock if self.hub is not None else _NULL_LOCK
+                            with lock:
+                                if self._held():
+                                    return False
+                                ok, seat, msg = self.grabber.replay(
+                                    self.recipe, day=disp, hhmm=s.time, movie=mov_nm,
+                                    persons=persons, preferred=preferred,
+                                    only_preferred=only, prefer=prefer)
                             if ok:
+                                if self.hub is not None:
+                                    self.hub.held.set()
                                 log(f"[무대인사] ✅ 좌석 선점: {mov_nm} {seat} — {msg}. "
                                     f"결제 페이지에서 결제하세요.(감시 종료)")
                                 self._notify("seat_held", mov_nm, site_nm, disp, s.time,
@@ -129,15 +147,14 @@ class EventWatcher:
         except Exception:  # noqa: BLE001
             pass
 
-    @staticmethod
-    def _sleep(seconds: int, stop_event) -> None:
+    def _sleep(self, seconds: int, stop_event) -> None:
         waited = 0.0
-        while waited < seconds and not stop_event.is_set():
+        while waited < seconds and not stop_event.is_set() and not self._held():
             time.sleep(0.5)
             waited += 0.5
 
     def close(self) -> None:
-        if self.grabber:
+        if self.grabber and self.hub is None:   # 허브 소유 브라우저는 허브가 닫는다
             try:
                 self.grabber.close()
             except Exception:  # noqa: BLE001

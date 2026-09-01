@@ -1,8 +1,10 @@
 """
 CGV 좌석 감시 · 자동잡기 — 다크 UI (CustomTkinter).
 
-모드: 취소표 감지 / 상영 오픈 감지.
-영화·극장·날짜·상영관·회차를 드롭다운으로 선택. 감지 시 녹화 흐름대로 좌석 자동 잡기.
+탭: 취소표 감지 / 상영 오픈 감지 / 무대인사 감지 / 설정.
+- 감지는 전부 CGV 조회 API 폴링(로그인·창 불필요). 실제 좌석잡기 때만 크롬 1개를 연다.
+- 모든 감시는 크롬 1개(WatchHub)를 공유하고, 좌석잡기는 락으로 직렬화 → 창 충돌 없음.
+- '로그인 준비'로 1회 로그인하면 세션이 프로필에 저장돼, 자리에 없어도 자동으로 잡는다.
 """
 from __future__ import annotations
 
@@ -45,24 +47,26 @@ class App(ctk.CTk):
         super().__init__()
         ctk.set_appearance_mode("dark")
         self.title("CGV SEAT WATCHER")
-        self.geometry("820x860")
+        self.geometry("860x900")
         self.configure(fg_color=BG)
 
         self.log_q: "queue.Queue[str]" = queue.Queue()
         self.rec_thread = None
         self.rec_start = threading.Event()
         self.rec_stop = threading.Event()
-        self.watch_thread = None
         self.watch_stop = threading.Event()
-        self.watcher = None
+        self.hub = None
+        self.workers: list = []
+        self._active = 0
 
-        self.target_list: list[dict] = []      # 감시 대상 목록(여러 개)
+        self.cancel_list: list[dict] = []      # 취소표 감지 대상
+        self.open_list: list[dict] = []        # 상영오픈 감지 대상
         self.event_theaters: list[str] = []    # 무대인사 감지 극장(이름)
-        self.movies: dict[str, str] = {}      # name -> movNo
-        self.theaters: dict[str, tuple] = {}   # name -> (siteNo, region)
+        self.panels: list[dict] = []           # 영화/극장 메뉴 갱신 대상
+        self.movies: dict[str, str] = {}
+        self.theaters: dict[str, tuple] = {}
         self.dates = _gen_dates()
         self.date_map = {lbl: val for lbl, val in self.dates}
-        self.time_map: dict[str, str] = {}     # label -> HH:MM
 
         self._build()
         self._load()
@@ -71,7 +75,7 @@ class App(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         threading.Thread(target=self._load_lists, daemon=True).start()
 
-    # ---------- UI ----------
+    # ---------- UI helpers ----------
     def _card(self, parent, title=None):
         c = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=14)
         c.pack(fill="x", padx=16, pady=8)
@@ -80,60 +84,43 @@ class App(ctk.CTk):
                          font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=16, pady=(12, 2))
         return c
 
-    def _build(self):
-        # 헤더
-        head = ctk.CTkFrame(self, fg_color=BG, height=64)
-        head.pack(fill="x", padx=16, pady=(14, 2))
-        dot = ctk.CTkLabel(head, text="●", text_color=RED, font=ctk.CTkFont(size=22))
-        dot.pack(side="left")
-        ctk.CTkLabel(head, text="CGV Seat Watcher", text_color="white",
-                     font=ctk.CTkFont(size=22, weight="bold")).pack(side="left", padx=6)
-        ctk.CTkLabel(head, text="취소표·오픈 감지 → 좌석 자동 잡기", text_color=SUB,
-                     font=ctk.CTkFont(size=12)).pack(side="left", padx=10)
+    def _note(self, parent, text):
+        ctk.CTkLabel(parent, text=text, text_color=SUB, justify="left", wraplength=760,
+                     font=ctk.CTkFont(size=12)).pack(anchor="w", padx=20, pady=(6, 2))
 
-        # === 하단 고정: 액션바(감시 시작/중지) + 로그 — 항상 보이게 ===
-        actionbar = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0)
-        actionbar.pack(side="bottom", fill="x")
-        ctk.CTkButton(actionbar, text="설정 저장", fg_color="#33333A", hover_color="#44444C",
-                      width=90, command=self._save).pack(side="left", padx=(14, 6), pady=10)
-        self.b_start = ctk.CTkButton(actionbar, text="감시 시작", fg_color=RED, hover_color=RED_DK,
-                                     font=ctk.CTkFont(size=14, weight="bold"), width=150, height=38,
-                                     command=self._watch_start)
-        self.b_start.pack(side="left", padx=6, pady=10)
-        self.b_stop = ctk.CTkButton(actionbar, text="중지", fg_color="#33333A", hover_color="#44444C",
-                                    width=80, height=38, state="disabled", command=self._watch_stop)
-        self.b_stop.pack(side="left", pady=10)
-        self.stat = ctk.CTkLabel(actionbar, text="● 대기", text_color=SUB)
-        self.stat.pack(side="right", padx=16)
+    def _dd(self, parent, values, width=None):
+        kw = dict(values=values, fg_color="#2A2A30", button_color=RED, button_hover_color=RED_DK)
+        if width:
+            kw["width"] = width
+        return ctk.CTkOptionMenu(parent, **kw)
 
-        self.logbox = ctk.CTkTextbox(self, fg_color="#050506", text_color="#D6D6DA",
-                                     font=ctk.CTkFont(size=12), height=130, corner_radius=0)
-        self.logbox.pack(side="bottom", fill="x")
-        self.logbox.configure(state="disabled")
+    def _ps_card(self, parent, ns):
+        """인원·좌석·주기 위젯을 ns에 채운다."""
+        pc = self._card(parent, "인원 · 좌석")
+        prow = ctk.CTkFrame(pc, fg_color=PANEL); prow.pack(fill="x", padx=16, pady=(4, 4))
+        ns["gen"] = self._dd(prow, [str(i) for i in range(0, 9)], 64)
+        ns["teen"] = self._dd(prow, [str(i) for i in range(0, 9)], 64)
+        ns["pref"] = self._dd(prow, [str(i) for i in range(0, 9)], 64)
+        ns["gen"].set("2")
+        for t, w in [("일반", ns["gen"]), ("청소년", ns["teen"]), ("우대", ns["pref"])]:
+            ctk.CTkLabel(prow, text=t, text_color=SUB).pack(side="left", padx=(10, 3)); w.pack(side="left")
 
-        # === 탭 (가운데, 스크롤) ===
-        self.tabs = ctk.CTkTabview(self, fg_color=BG,
-                                   segmented_button_selected_color=RED,
-                                   segmented_button_selected_hover_color=RED_DK)
-        self.tabs.pack(fill="both", expand=True, padx=10, pady=(2, 4))
-        main_tab = self.tabs.add("감시")
-        sett = self.tabs.add("설정")
-        main = ctk.CTkScrollableFrame(main_tab, fg_color=BG)
-        main.pack(fill="both", expand=True)
+        srow = ctk.CTkFrame(pc, fg_color=PANEL); srow.pack(fill="x", padx=16, pady=(4, 12))
+        ctk.CTkLabel(srow, text="원하는 좌석", text_color=SUB).pack(side="left", padx=(6, 4))
+        ns["seats"] = ctk.CTkEntry(srow, placeholder_text="예: E9,E10 (비우면 자동)", width=160, fg_color="#2A2A30")
+        ns["seats"].pack(side="left")
+        ns["only"] = ctk.CTkSwitch(srow, text="이 좌석만", progress_color=RED)
+        ns["only"].pack(side="left", padx=10)
+        ctk.CTkLabel(srow, text="위치", text_color=SUB).pack(side="left", padx=(10, 3))
+        ns["pos"] = self._dd(srow, ["center", "front", "back", "any"], 90); ns["pos"].pack(side="left")
+        ctk.CTkLabel(srow, text="주기(초)", text_color=SUB).pack(side="left", padx=(10, 3))
+        ns["int"] = self._dd(srow, ["5", "10", "15", "30", "60"], 70); ns["int"].set("10"); ns["int"].pack(side="left")
 
-        # 모드
-        mc = self._card(main)
-        self.mode = ctk.CTkSegmentedButton(
-            mc, values=["취소표 감지", "상영 오픈 감지", "무대인사 감지"], selected_color=RED,
-            selected_hover_color=RED_DK, font=ctk.CTkFont(size=13, weight="bold"),
-            command=lambda _v: None)
-        self.mode.set("취소표 감지")
-        self.mode.pack(fill="x", padx=16, pady=12)
-
-        # 대상
-        tc = self._card(main, "대상 선택")
-        grid = ctk.CTkFrame(tc, fg_color=PANEL)
-        grid.pack(fill="x", padx=16, pady=(4, 12))
+    def _target_panel(self, parent):
+        """영화/극장/날짜/상영관/회차 + 인원·좌석. ns dict 반환(메뉴 갱신용으로 self.panels 등록)."""
+        ns: dict = {"time_map": {}}
+        tc = self._card(parent, "대상 선택")
+        grid = ctk.CTkFrame(tc, fg_color=PANEL); grid.pack(fill="x", padx=16, pady=(4, 12))
         for i in range(4):
             grid.grid_columnconfigure(i, weight=1)
 
@@ -141,71 +128,111 @@ class App(ctk.CTk):
             ctk.CTkLabel(grid, text=t, text_color=SUB, font=ctk.CTkFont(size=11)).grid(
                 row=r, column=cc, sticky="w", padx=6, pady=(6, 0))
 
-        self.dd_movie = ctk.CTkOptionMenu(grid, values=["불러오는 중…"], fg_color="#2A2A30",
-                                          button_color=RED, button_hover_color=RED_DK)
-        self.dd_theater = ctk.CTkOptionMenu(grid, values=["불러오는 중…"], fg_color="#2A2A30",
-                                            button_color=RED, button_hover_color=RED_DK)
-        self.dd_date = ctk.CTkOptionMenu(grid, values=[l for l, _ in self.dates], fg_color="#2A2A30",
-                                         button_color=RED, button_hover_color=RED_DK)
-        self.dd_screen = ctk.CTkOptionMenu(grid, values=SCREENS, fg_color="#2A2A30",
-                                           button_color=RED, button_hover_color=RED_DK)
-        lab(0, 0, "영화"); self.dd_movie.grid(row=1, column=0, sticky="ew", padx=6, pady=(0, 6))
-        lab(0, 1, "극장"); self.dd_theater.grid(row=1, column=1, sticky="ew", padx=6, pady=(0, 6))
-        lab(0, 2, "날짜"); self.dd_date.grid(row=1, column=2, sticky="ew", padx=6, pady=(0, 6))
-        lab(0, 3, "상영관"); self.dd_screen.grid(row=1, column=3, sticky="ew", padx=6, pady=(0, 6))
-
+        ns["movie"] = self._dd(grid, ["불러오는 중…"])
+        ns["theater"] = self._dd(grid, ["불러오는 중…"])
+        ns["date"] = self._dd(grid, [l for l, _ in self.dates])
+        ns["screen"] = self._dd(grid, SCREENS)
+        lab(0, 0, "영화"); ns["movie"].grid(row=1, column=0, sticky="ew", padx=6, pady=(0, 6))
+        lab(0, 1, "극장"); ns["theater"].grid(row=1, column=1, sticky="ew", padx=6, pady=(0, 6))
+        lab(0, 2, "날짜"); ns["date"].grid(row=1, column=2, sticky="ew", padx=6, pady=(0, 6))
+        lab(0, 3, "상영관"); ns["screen"].grid(row=1, column=3, sticky="ew", padx=6, pady=(0, 6))
         lab(2, 0, "회차(시간)")
-        self.dd_time = ctk.CTkOptionMenu(grid, values=["전체(자동)"], fg_color="#2A2A30",
-                                         button_color=RED, button_hover_color=RED_DK)
-        self.dd_time.grid(row=3, column=0, columnspan=2, sticky="ew", padx=6, pady=(0, 6))
+        ns["time"] = self._dd(grid, ["전체(자동)"])
+        ns["time"].grid(row=3, column=0, columnspan=2, sticky="ew", padx=6, pady=(0, 6))
         ctk.CTkButton(grid, text="회차 불러오기", fg_color="#33333A", hover_color="#44444C",
-                      command=self._load_times).grid(row=3, column=2, sticky="ew", padx=6, pady=(0, 6))
+                      command=lambda: self._load_times(ns)).grid(row=3, column=2, sticky="ew", padx=6, pady=(0, 6))
 
-        # 인원 / 좌석
-        pc = self._card(main, "인원 · 좌석")
-        prow = ctk.CTkFrame(pc, fg_color=PANEL); prow.pack(fill="x", padx=16, pady=(4, 4))
-        self.n_gen = ctk.CTkOptionMenu(prow, values=[str(i) for i in range(0, 9)], width=64,
-                                       fg_color="#2A2A30", button_color=RED, button_hover_color=RED_DK)
-        self.n_teen = ctk.CTkOptionMenu(prow, values=[str(i) for i in range(0, 9)], width=64,
-                                        fg_color="#2A2A30", button_color=RED, button_hover_color=RED_DK)
-        self.n_pref = ctk.CTkOptionMenu(prow, values=[str(i) for i in range(0, 9)], width=64,
-                                        fg_color="#2A2A30", button_color=RED, button_hover_color=RED_DK)
-        self.n_gen.set("2")
-        for t, w in [("일반", self.n_gen), ("청소년", self.n_teen), ("우대", self.n_pref)]:
-            ctk.CTkLabel(prow, text=t, text_color=SUB).pack(side="left", padx=(10, 3)); w.pack(side="left")
+        self._ps_card(parent, ns)
+        self.panels.append(ns)
+        return ns
 
-        srow = ctk.CTkFrame(pc, fg_color=PANEL); srow.pack(fill="x", padx=16, pady=(4, 12))
-        ctk.CTkLabel(srow, text="원하는 좌석", text_color=SUB).pack(side="left", padx=(6, 4))
-        self.e_seats = ctk.CTkEntry(srow, placeholder_text="예: E9,E10 (비우면 자동)", width=170,
-                                    fg_color="#2A2A30")
-        self.e_seats.pack(side="left")
-        self.sw_only = ctk.CTkSwitch(srow, text="이 좌석만", progress_color=RED)
-        self.sw_only.pack(side="left", padx=10)
-        ctk.CTkLabel(srow, text="위치", text_color=SUB).pack(side="left", padx=(10, 3))
-        self.dd_pos = ctk.CTkOptionMenu(srow, values=["center", "front", "back", "any"], width=90,
-                                        fg_color="#2A2A30", button_color=RED, button_hover_color=RED_DK)
-        self.dd_pos.pack(side="left")
-        ctk.CTkLabel(srow, text="주기(초)", text_color=SUB).pack(side="left", padx=(10, 3))
-        self.dd_int = ctk.CTkOptionMenu(srow, values=["5", "10", "15", "30", "60"], width=70,
-                                        fg_color="#2A2A30", button_color=RED, button_hover_color=RED_DK)
-        self.dd_int.set("10"); self.dd_int.pack(side="left")
+    def _list_card(self, parent, title, mode):
+        """대상 목록 카드(추가/비우기 + 스크롤 리스트). 리스트 프레임을 반환."""
+        lc = self._card(parent, title)
+        addrow = ctk.CTkFrame(lc, fg_color=PANEL); addrow.pack(fill="x", padx=16, pady=(4, 4))
+        ctk.CTkButton(addrow, text="＋ 현재 설정을 목록에 추가", fg_color=RED, hover_color=RED_DK,
+                      command=lambda: self._add_to(mode)).pack(side="left")
+        ctk.CTkButton(addrow, text="목록 비우기", fg_color="#33333A", hover_color="#44444C",
+                      command=lambda: self._clear_list(mode)).pack(side="left", padx=8)
+        frame = ctk.CTkScrollableFrame(lc, fg_color="#141417", height=130)
+        frame.pack(fill="x", padx=16, pady=(2, 12))
+        return frame
 
-        # === 무대인사 감지 극장 (모드 '무대인사 감지'에서 사용) ===
-        ec = self._card(main, "무대인사 감지 극장 (선택 극장의 상영중 전체영화를 자동 감지 → 즉시 좌석잡기)")
+    def _build(self):
+        # 헤더
+        head = ctk.CTkFrame(self, fg_color=BG, height=64)
+        head.pack(fill="x", padx=16, pady=(14, 2))
+        ctk.CTkLabel(head, text="●", text_color=RED, font=ctk.CTkFont(size=22)).pack(side="left")
+        ctk.CTkLabel(head, text="CGV Seat Watcher", text_color="white",
+                     font=ctk.CTkFont(size=22, weight="bold")).pack(side="left", padx=6)
+        ctk.CTkLabel(head, text="취소표·오픈·무대인사 감지 → 좌석 자동 잡기", text_color=SUB,
+                     font=ctk.CTkFont(size=12)).pack(side="left", padx=10)
+
+        # === 하단 고정: 액션바 + 로그 (항상 보이게) ===
+        actionbar = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0)
+        actionbar.pack(side="bottom", fill="x")
+        ctk.CTkButton(actionbar, text="① 로그인 준비", fg_color="#33333A", hover_color="#44444C",
+                      width=110, command=self._prelogin).pack(side="left", padx=(14, 6), pady=10)
+        ctk.CTkButton(actionbar, text="설정 저장", fg_color="#33333A", hover_color="#44444C",
+                      width=80, command=self._save).pack(side="left", padx=(0, 6), pady=10)
+        self.b_start = ctk.CTkButton(actionbar, text="② 감시 시작", fg_color=RED, hover_color=RED_DK,
+                                     font=ctk.CTkFont(size=14, weight="bold"), width=140, height=38,
+                                     command=self._watch_start)
+        self.b_start.pack(side="left", padx=6, pady=10)
+        self.b_stop = ctk.CTkButton(actionbar, text="중지", fg_color="#33333A", hover_color="#44444C",
+                                    width=70, height=38, state="disabled", command=self._watch_stop)
+        self.b_stop.pack(side="left", pady=10)
+        self.stat = ctk.CTkLabel(actionbar, text="● 대기", text_color=SUB); self.stat.pack(side="right", padx=16)
+
+        self.logbox = ctk.CTkTextbox(self, fg_color="#050506", text_color="#D6D6DA",
+                                     font=ctk.CTkFont(size=12), height=130, corner_radius=0)
+        self.logbox.pack(side="bottom", fill="x")
+        self.logbox.configure(state="disabled")
+
+        # === 탭 ===
+        self.tabs = ctk.CTkTabview(self, fg_color=BG, segmented_button_selected_color=RED,
+                                   segmented_button_selected_hover_color=RED_DK)
+        self.tabs.pack(fill="both", expand=True, padx=10, pady=(2, 4))
+        t_cancel = ctk.CTkScrollableFrame(self.tabs.add("취소표 감지"), fg_color=BG)
+        t_cancel.pack(fill="both", expand=True)
+        t_open = ctk.CTkScrollableFrame(self.tabs.add("상영 오픈 감지"), fg_color=BG)
+        t_open.pack(fill="both", expand=True)
+        t_event = ctk.CTkScrollableFrame(self.tabs.add("무대인사 감지"), fg_color=BG)
+        t_event.pack(fill="both", expand=True)
+        sett = ctk.CTkScrollableFrame(self.tabs.add("설정"), fg_color=BG)
+        sett.pack(fill="both", expand=True)
+
+        # --- 취소표 감지 탭 ---
+        self._note(t_cancel, "매진된 회차의 잔여석(취소표)을 API로 상시 확인합니다. 자리가 나면 크롬을 열어\n"
+                             "원하는 인원·좌석으로 결제하기까지 자동 선점합니다. 여러 대상을 동시에 감시할 수 있어요.")
+        self.ns_cancel = self._target_panel(t_cancel)
+        self.cancel_frame = self._list_card(t_cancel, "취소표 감시 대상 (여러 개 · 동시 감시)", "취소표")
+
+        # --- 상영 오픈 감지 탭 ---
+        self._note(t_open, "아직 열리지 않은 회차가 예매 오픈되는 순간을 API로 감지해 바로 잡습니다.\n"
+                           "회차 시간은 '전체(자동)'로 두면 오픈되는 첫 회차를 잡습니다.")
+        self.ns_open = self._target_panel(t_open)
+        self.open_frame = self._list_card(t_open, "상영오픈 감시 대상 (여러 개 · 동시 감시)", "상영오픈")
+
+        # --- 무대인사 감지 탭 ---
+        self._note(t_event, "영화를 지정하지 않고, 선택한 극장의 '상영중 전체영화'를 매 사이클 새로 불러와(최신화)\n"
+                            "무대인사/GV/내한/관객과의 대화를 감지합니다. 개봉 전 영화도 예매가 열리는 순간 자동 포착.\n"
+                            "전 극장 스캔은 차단(429) 위험이 커서 극장 지정식입니다.")
+        ec = self._card(t_event, "무대인사 감지 극장 (여러 곳)")
         erow = ctk.CTkFrame(ec, fg_color=PANEL); erow.pack(fill="x", padx=16, pady=(4, 4))
-        ctk.CTkButton(erow, text="＋ 위 '극장' 추가", fg_color=RED, hover_color=RED_DK,
+        self.ev_theater = self._dd(erow, ["불러오는 중…"], 220); self.ev_theater.pack(side="left", padx=(6, 6))
+        ctk.CTkButton(erow, text="＋ 극장 추가", fg_color=RED, hover_color=RED_DK,
                       command=self._add_event_theater).pack(side="left")
         ctk.CTkButton(erow, text="비우기", fg_color="#33333A", hover_color="#44444C",
                       command=self._clear_event_theaters).pack(side="left", padx=8)
         ctk.CTkLabel(erow, text="날짜범위", text_color=SUB).pack(side="left", padx=(12, 3))
-        self.dd_days = ctk.CTkOptionMenu(erow, values=["3", "7", "14"], width=70, fg_color="#2A2A30",
-                                         button_color=RED, button_hover_color=RED_DK)
-        self.dd_days.set("7"); self.dd_days.pack(side="left")
-        self.ev_lbl = ctk.CTkLabel(ec, text="(선택된 극장 없음)", text_color=SUB,
-                                   wraplength=700, justify="left")
+        self.dd_days = self._dd(erow, ["3", "7", "14"], 70); self.dd_days.set("7"); self.dd_days.pack(side="left")
+        self.ev_lbl = ctk.CTkLabel(ec, text="(선택된 극장 없음)", text_color=SUB, wraplength=740, justify="left")
         self.ev_lbl.pack(anchor="w", padx=16, pady=(2, 12))
+        self.ns_event = {}
+        self._ps_card(t_event, self.ns_event)
 
-        # === 설정 탭: 녹화 + 디스코드 ===
+        # --- 설정 탭: 녹화 + 디스코드 ---
         rc = self._card(sett, "녹화 (최초 1회 · 로그인 + 예매 클릭 기록)")
         r1 = ctk.CTkFrame(rc, fg_color=PANEL); r1.pack(fill="x", padx=16, pady=(4, 12))
         self.b_rec = ctk.CTkButton(r1, text="녹화 시작하기", fg_color="#33333A", hover_color="#44444C",
@@ -227,15 +254,8 @@ class App(ctk.CTk):
         self.e_ment = ctk.CTkEntry(drow, placeholder_text="멘션 ID", width=140, fg_color="#2A2A30")
         self.e_ment.pack(side="left")
 
-        # === 대상 목록 (여러 개) ===
-        lc = self._card(main, "감시 대상 목록 (여러 개 등록 → 동시 감시)")
-        addrow = ctk.CTkFrame(lc, fg_color=PANEL); addrow.pack(fill="x", padx=16, pady=(4, 4))
-        ctk.CTkButton(addrow, text="＋ 현재 설정을 목록에 추가", fg_color=RED, hover_color=RED_DK,
-                      command=self._add_target).pack(side="left")
-        ctk.CTkButton(addrow, text="목록 비우기", fg_color="#33333A", hover_color="#44444C",
-                      command=self._clear_list).pack(side="left", padx=8)
-        self.list_frame = ctk.CTkScrollableFrame(lc, fg_color="#141417", height=140)
-        self.list_frame.pack(fill="x", padx=16, pady=(2, 12))
+        self._note(sett, "로그인 준비: 크롬을 띄워 1회 로그인하면 세션이 프로필에 저장됩니다. 이후에는 자리에 없어도\n"
+                         "감지 시 자동으로 로그인된 상태로 좌석을 잡습니다. 모든 감시는 크롬 1개를 공유합니다.")
 
     # ---------- 데이터 로드 ----------
     def _load_lists(self):
@@ -251,33 +271,30 @@ class App(ctk.CTk):
     def _fill_lists(self):
         mv = list(self.movies.keys()) or ["(없음)"]
         th = list(self.theaters.keys()) or ["(없음)"]
-        self.dd_movie.configure(values=mv)
-        self.dd_theater.configure(values=th)
-        cfg = load_cfg()
-        self.dd_movie.set(cfg.get("movie") if cfg.get("movie") in mv else mv[0])
-        self.dd_theater.set(cfg.get("theater") if cfg.get("theater") in th else
-                            ("센텀시티" if "센텀시티" in th else th[0]))
+        default_th = "센텀시티" if "센텀시티" in th else th[0]
+        for ns in self.panels:
+            ns["movie"].configure(values=mv); ns["movie"].set(mv[0])
+            ns["theater"].configure(values=th); ns["theater"].set(default_th)
+        self.ev_theater.configure(values=th); self.ev_theater.set(default_th)
 
-    def _load_times(self):
+    def _load_times(self, ns):
         def worker():
             try:
-                mv = self.movies.get(self.dd_movie.get())
-                th = self.theaters.get(self.dd_theater.get())
-                day = self.date_map.get(self.dd_date.get())
+                mv = self.movies.get(ns["movie"].get())
+                th = self.theaters.get(ns["theater"].get())
+                day = self.date_map.get(ns["date"].get())
                 if not (mv and th and day):
                     self._put("영화/극장/날짜를 먼저 선택하세요."); return
                 shows = cgv_api.fetch_showtimes(mv, th[0], day.replace("-", ""))
-                screen = "" if self.dd_screen.get() == "전체" else self.dd_screen.get()
+                screen = "" if ns["screen"].get() == "전체" else ns["screen"].get()
                 if screen:
-                    shows = [s for s in shows
-                             if screen.lower() in (s.screen + " " + s.fmt).lower()]
-                labels = ["전체(자동)"]
-                self.time_map = {}
+                    shows = [s for s in shows if screen.lower() in (s.screen + " " + s.fmt).lower()]
+                labels = ["전체(자동)"]; ns["time_map"] = {}
                 for s in shows:
                     ev = f"  🎤{s.event}" if getattr(s, "event", "") else ""
                     lb = f"{s.time}  {s.screen} 잔여{s.remaining}{ev}"
-                    labels.append(lb); self.time_map[lb] = s.time
-                self.after(0, lambda: (self.dd_time.configure(values=labels), self.dd_time.set(labels[0])))
+                    labels.append(lb); ns["time_map"][lb] = s.time
+                self.after(0, lambda: (ns["time"].configure(values=labels), ns["time"].set(labels[0])))
                 self._put(f"회차 {len(shows)}건 불러옴{(' ('+screen+')') if screen else ''}.")
             except Exception as e:  # noqa: BLE001
                 self._put(f"회차 불러오기 실패: {e}")
@@ -302,7 +319,7 @@ class App(ctk.CTk):
 
     # ---------- 녹화 ----------
     def _rec_open(self):
-        if self.watch_thread and self.watch_thread.is_alive():
+        if self.workers and self._active > 0:
             self._put("감시 중에는 녹화 불가."); return
         from cgv_macro.recorder import run_recorder
         self.rec_start.clear(); self.rec_stop.clear()
@@ -325,37 +342,111 @@ class App(ctk.CTk):
         self.b_rec_go.configure(state="disabled")
         self.b_rec_end.configure(state="disabled", fg_color="#33333A", text_color="white")
 
-    # ---------- 설정 ----------
-    def _target(self):
+    # ---------- 설정 읽기/저장 ----------
+    def _read_ps(self, ns) -> dict:
         return {
-            "mode": self.mode.get(),
-            "movie": self.dd_movie.get(),
-            "theater": self.dd_theater.get(),
-            "date": self.date_map.get(self.dd_date.get(), ""),
-            "date_label": self.dd_date.get(),
-            "time": self.time_map.get(self.dd_time.get(), ""),
-            "time_label": self.dd_time.get(),
-            "screen_type": "" if self.dd_screen.get() == "전체" else self.dd_screen.get(),
-            "persons": {"일반": int(self.n_gen.get()), "청소년": int(self.n_teen.get()), "우대": int(self.n_pref.get())},
-            "preferred": [s.strip() for s in self.e_seats.get().split(",") if s.strip()],
-            "only_preferred": bool(self.sw_only.get()),
-            "prefer": self.dd_pos.get(),
-            "interval": int(self.dd_int.get()),
+            "persons": {"일반": int(ns["gen"].get()), "청소년": int(ns["teen"].get()), "우대": int(ns["pref"].get())},
+            "preferred": [s.strip() for s in ns["seats"].get().split(",") if s.strip()],
+            "only_preferred": bool(ns["only"].get()),
+            "prefer": ns["pos"].get(),
+            "interval": int(ns["int"].get()),
+        }
+
+    def _read_target(self, ns, mode) -> dict:
+        t = {
+            "mode": mode,
+            "movie": ns["movie"].get(),
+            "theater": ns["theater"].get(),
+            "date": self.date_map.get(ns["date"].get(), ""),
+            "date_label": ns["date"].get(),
+            "time": ns["time_map"].get(ns["time"].get(), ""),
+            "time_label": ns["time"].get(),
+            "screen_type": "" if ns["screen"].get() == "전체" else ns["screen"].get(),
             "webhook": self.e_hook.get().strip(),
             "mention": self.e_ment.get().strip(),
         }
+        t.update(self._read_ps(ns))
+        return t
 
     def _save(self):
-        c = self._target(); c["targets"] = self.target_list
-        c["event_theaters"] = self.event_theaters
-        c["days"] = int(self.dd_days.get())
-        save_cfg(c); self._put("설정 저장됨.")
+        save_cfg({
+            "cancel": self.cancel_list, "open": self.open_list,
+            "event_theaters": self.event_theaters, "days": int(self.dd_days.get()),
+            "webhook": self.e_hook.get().strip(), "mention": self.e_ment.get().strip(),
+        })
+        self._put("설정 저장됨.")
 
-    # ---------- 무대인사 감지 극장 ----------
+    def _load(self):
+        c = load_cfg()
+        if not c:
+            self._refresh_target_list("취소표"); self._refresh_target_list("상영오픈")
+            self._refresh_event_theaters(); return
+        self.cancel_list = c.get("cancel", []) or []
+        self.open_list = c.get("open", []) or []
+        self.event_theaters = c.get("event_theaters", []) or []
+        self._refresh_target_list("취소표"); self._refresh_target_list("상영오픈")
+        self._refresh_event_theaters()
+        if c.get("days"):
+            self.dd_days.set(str(c.get("days")))
+        if c.get("webhook"):
+            self.e_hook.insert(0, c["webhook"])
+        if c.get("mention"):
+            self.e_ment.insert(0, c["mention"])
+
+    # ---------- 대상 목록(취소표/상영오픈) ----------
+    def _list_for(self, mode):
+        return self.cancel_list if mode == "취소표" else self.open_list
+
+    def _ns_for(self, mode):
+        return self.ns_cancel if mode == "취소표" else self.ns_open
+
+    def _frame_for(self, mode):
+        return self.cancel_frame if mode == "취소표" else self.open_frame
+
+    def _add_to(self, mode):
+        ns = self._ns_for(mode)
+        t = self._read_target(ns, mode)
+        if not t["date"]:
+            self._put("날짜를 선택하고 추가하세요."); return
+        lst = self._list_for(mode)
+        if len(lst) >= 8:
+            self._put("대상은 최대 8개까지."); return
+        lst.append(t); self._refresh_target_list(mode); self._save()
+        self._put(f"[{mode}] 목록 추가: {t['movie']} / {t['theater']} / {t['date']} {t['time'] or '(전체)'}")
+
+    def _remove_target(self, mode, idx):
+        lst = self._list_for(mode)
+        if 0 <= idx < len(lst):
+            del lst[idx]; self._refresh_target_list(mode); self._save()
+
+    def _clear_list(self, mode):
+        if mode == "취소표":
+            self.cancel_list = []
+        else:
+            self.open_list = []
+        self._refresh_target_list(mode); self._save()
+
+    def _refresh_target_list(self, mode):
+        frame = self._frame_for(mode); lst = self._list_for(mode)
+        for w in frame.winfo_children():
+            w.destroy()
+        if not lst:
+            ctk.CTkLabel(frame, text="(비어있음 — 위 설정을 추가하세요)", text_color=SUB).pack(anchor="w", padx=6, pady=6)
+            return
+        for i, t in enumerate(lst):
+            row = ctk.CTkFrame(frame, fg_color="#1E1E22", corner_radius=8)
+            row.pack(fill="x", padx=4, pady=3)
+            seats = (" · " + ",".join(t.get("preferred") or [])) if t.get("preferred") else ""
+            txt = f"{i+1}. {t['movie']} · {t['theater']} · {t['date']} · {t['time'] or '전체'}{seats}"
+            ctk.CTkLabel(row, text=txt, text_color="white").pack(side="left", padx=10, pady=6)
+            ctk.CTkButton(row, text="삭제", width=48, fg_color="#3A2A2A", hover_color=RED,
+                          command=lambda idx=i: self._remove_target(mode, idx)).pack(side="right", padx=6)
+
+    # ---------- 무대인사 극장 ----------
     def _add_event_theater(self):
-        nm = self.dd_theater.get()
+        nm = self.ev_theater.get()
         if nm in ("불러오는 중…", "(없음)", ""):
-            self._put("극장 목록이 로드된 뒤 '극장'을 고르고 추가하세요."); return
+            self._put("극장 목록이 로드된 뒤 극장을 고르고 추가하세요."); return
         if nm not in self.event_theaters:
             self.event_theaters.append(nm); self._refresh_event_theaters(); self._save()
             self._put(f"무대인사 감지 극장 추가: {nm}")
@@ -367,126 +458,108 @@ class App(ctk.CTk):
         txt = ("· " + ",  ".join(self.event_theaters)) if self.event_theaters else "(선택된 극장 없음)"
         self.ev_lbl.configure(text=txt)
 
-    # ---------- 대상 목록 ----------
-    def _add_target(self):
-        t = self._target()
-        if not t["date"]:
-            self._put("날짜를 선택하고 추가하세요."); return
-        if len(self.target_list) >= 8:
-            self._put("대상은 최대 8개까지."); return
-        self.target_list.append(t)
-        self._refresh_list()
-        self._save()
-        self._put(f"목록 추가: {t['movie']} / {t['theater']} / {t['date']} {t['time'] or '(전체)'}")
-
-    def _remove_target(self, idx):
-        if 0 <= idx < len(self.target_list):
-            del self.target_list[idx]; self._refresh_list(); self._save()
-
-    def _clear_list(self):
-        self.target_list = []; self._refresh_list(); self._save()
-
-    def _refresh_list(self):
-        for w in self.list_frame.winfo_children():
-            w.destroy()
-        if not self.target_list:
-            ctk.CTkLabel(self.list_frame, text="(비어있음 — 현재 설정을 추가하거나, 목록이 비면 위 설정 1개로 감시)",
-                         text_color=SUB).pack(anchor="w", padx=6, pady=6)
-            return
-        for i, t in enumerate(self.target_list):
-            row = ctk.CTkFrame(self.list_frame, fg_color="#1E1E22", corner_radius=8)
-            row.pack(fill="x", padx=4, pady=3)
-            seats = (" · " + ",".join(t.get("preferred") or [])) if t.get("preferred") else ""
-            txt = (f"{i+1}. {t['movie']} · {t['theater']} · {t['date']} · "
-                   f"{t['time'] or '전체'}{seats}")
-            ctk.CTkLabel(row, text=txt, text_color="white").pack(side="left", padx=10, pady=6)
-            ctk.CTkButton(row, text="삭제", width=48, fg_color="#3A2A2A", hover_color=RED,
-                          command=lambda idx=i: self._remove_target(idx)).pack(side="right", padx=6)
-
-    def _load(self):
-        c = load_cfg()
-        if not c:
-            self._refresh_list(); return
-        self.target_list = c.get("targets", []) or []
-        self._refresh_list()
-        self.event_theaters = c.get("event_theaters", []) or []
-        self._refresh_event_theaters()
-        if c.get("days"):
-            self.dd_days.set(str(c.get("days")))
-        if c.get("mode"):
-            self.mode.set(c["mode"])
-        if c.get("date_label") in self.date_map:
-            self.dd_date.set(c["date_label"])
-        self.dd_screen.set(c.get("screen_type") or "전체")
-        p = c.get("persons", {})
-        self.n_gen.set(str(p.get("일반", 2))); self.n_teen.set(str(p.get("청소년", 0))); self.n_pref.set(str(p.get("우대", 0)))
-        if c.get("preferred"):
-            self.e_seats.insert(0, ",".join(c["preferred"]))
-        if c.get("only_preferred"):
-            self.sw_only.select()
-        self.dd_pos.set(c.get("prefer", "center"))
-        self.dd_int.set(str(c.get("interval", 10)))
-        if c.get("webhook"):
-            self.e_hook.insert(0, c["webhook"])
-        if c.get("mention"):
-            self.e_ment.insert(0, c["mention"])
-
-    # ---------- 감시 ----------
-    def _watch_start(self):
-        if self.watch_thread and self.watch_thread.is_alive():
-            return
-        if not os.path.exists(RECIPE):
-            self._put("먼저 '녹화 시작하기'로 예매 흐름을 1회 녹화하세요."); return
-        t = self._target()
-        recipe = json.load(open(RECIPE, encoding="utf-8"))
-        notifier = None
-        if t["webhook"]:
-            from cgv_macro.notifier import DiscordNotifier
-            notifier = DiscordNotifier(t["webhook"], t["mention"])
-
-        if self.mode.get() == "무대인사 감지":
-            ths = [(self.theaters[nm][0], nm) for nm in self.event_theaters if nm in self.theaters]
-            if not ths:
-                self._put("무대인사 감지할 극장을 1곳 이상 추가하세요."); return
-            self._save()
-            self._put(f"무대인사 감지 준비 — 극장 {len(ths)}곳. 크롬 로그인 창을 확인하세요…")
-            from cgv_macro.event_watch import EventWatcher
-            self.watcher = EventWatcher(recipe, ths, t, notifier, days=int(self.dd_days.get()))
-        else:
-            targets = list(self.target_list) if self.target_list else [t]
-            for tt in targets:
-                if not tt.get("date"):
-                    self._put("모든 대상에 날짜가 필요합니다."); return
-            self._save()
-            self._put(f"감시 준비 — 대상 {len(targets)}개. 크롬 로그인 창을 확인하세요…")
-            from cgv_macro.watcher import MultiWatcher
-            self.watcher = MultiWatcher(recipe, targets, notifier)
-        self.watch_stop.clear()
+    # ---------- 로그인 준비 ----------
+    def _prelogin(self):
+        from cgv_macro.hub import WatchHub
+        if self.hub is None:
+            self.hub = WatchHub()
+        self._put("[로그인] 크롬을 띄웁니다. 로그인 완료 후 창은 그대로 두세요(세션 유지).")
 
         def worker():
             try:
-                self.watcher.run(self.watch_stop, log=self._put)
+                ok = self.hub.ensure_login(self._put, timeout_s=600)
+                self._put("[로그인] 완료 — 이제 '감시 시작'하면 자동 로그인됩니다."
+                          if ok else "[로그인] 실패/시간초과 — 다시 시도하세요.")
             except Exception as e:  # noqa: BLE001
-                self._put(f"[감시] 오류: {e}")
-            finally:
-                self.after(0, self._watch_ended)
-        self.watch_thread = threading.Thread(target=worker, daemon=True); self.watch_thread.start()
+                self._put(f"[로그인] 오류: {e}")
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ---------- 감시 ----------
+    def _watch_start(self):
+        if self._active > 0:
+            return
+        if not os.path.exists(RECIPE):
+            self._put("먼저 '설정' 탭에서 예매 흐름을 1회 녹화하세요."); return
+        recipe = json.load(open(RECIPE, encoding="utf-8"))
+        webhook = self.e_hook.get().strip()
+        notifier = None
+        if webhook:
+            from cgv_macro.notifier import DiscordNotifier
+            notifier = DiscordNotifier(webhook, self.e_ment.get().strip())
+
+        from cgv_macro.hub import WatchHub
+        if self.hub is None:
+            self.hub = WatchHub()
+        self.hub.held.clear()
+
+        workers = []
+        poll = list(self.cancel_list) + list(self.open_list)
+        if poll:
+            from cgv_macro.watcher import MultiWatcher
+            workers.append(MultiWatcher(recipe, poll, notifier, hub=self.hub))
+        if self.event_theaters:
+            ths = [(self.theaters[nm][0], nm) for nm in self.event_theaters if nm in self.theaters]
+            if ths:
+                from cgv_macro.event_watch import EventWatcher
+                base = self._read_ps(self.ns_event)
+                workers.append(EventWatcher(recipe, ths, base, notifier,
+                                            days=int(self.dd_days.get()), hub=self.hub))
+        if not workers:
+            self._put("감시할 대상이 없습니다. 각 탭에서 대상/극장을 추가하세요."); return
+
+        self._save()
+        self.watch_stop.clear()
+        self.workers = workers
+        self._active = len(workers)
+        self._put(f"감시 시작 — 폴링대상 {len(poll)}개 / 무대인사극장 {len(self.event_theaters)}곳. "
+                  f"크롬 로그인 상태 확인 중…")
+
+        for w in workers:
+            threading.Thread(target=self._run_worker, args=(w,), daemon=True).start()
         self.b_start.configure(state="disabled")
         self.b_stop.configure(state="normal", fg_color=RED, hover_color=RED_DK)
         self.stat.configure(text="● 감시 중", text_color=GREEN)
 
+    def _run_worker(self, w):
+        try:
+            w.run(self.watch_stop, log=self._put)
+        except Exception as e:  # noqa: BLE001
+            self._put(f"[감시] 오류: {e}")
+        finally:
+            self.after(0, self._worker_done)
+
+    def _worker_done(self):
+        self._active -= 1
+        if self._active <= 0:
+            self._watch_ended()
+
     def _watch_stop(self):
-        self.watch_stop.set(); self.stat.configure(text="● 중지 중…", text_color="#E0A030")
+        self.watch_stop.set()
+        if self.hub:
+            self.hub.held.set()  # 진행 중 좌석잡기 이후 즉시 정지 유도
+        self.stat.configure(text="● 중지 중…", text_color="#E0A030")
 
     def _watch_ended(self):
-        if self.watcher:
-            self.watcher.close()
+        for w in self.workers:
+            try:
+                w.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self.workers = []
+        if self.hub:
+            try:
+                self.hub.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.hub = None
         self.b_start.configure(state="normal")
         self.b_stop.configure(state="disabled", fg_color="#33333A")
         self.stat.configure(text="● 대기", text_color=SUB)
 
     def _on_close(self):
         self.watch_stop.set(); self.rec_stop.set()
+        if self.hub:
+            self.hub.held.set()
         self.destroy()
 
 

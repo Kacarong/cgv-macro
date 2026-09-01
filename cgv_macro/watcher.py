@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import nullcontext
 
 from . import cgv_api
 from .replayer import Grabber
 
 logger = logging.getLogger("cgv_macro")
+_NULL_LOCK = nullcontext()
 
 
 def _scnymd(date: str) -> str:
@@ -113,10 +115,11 @@ class Watcher:
 class MultiWatcher:
     """여러 대상을 로그인된 크롬 1개로 동시 감시 → 자리가 뜬 것부터 잡기(예매는 하나씩)."""
 
-    def __init__(self, recipe: dict, targets: list[dict], notifier=None) -> None:
+    def __init__(self, recipe: dict, targets: list[dict], notifier=None, hub=None) -> None:
         self.recipe = recipe
         self.targets = targets
         self.notifier = notifier
+        self.hub = hub                       # 공유 브라우저 허브(있으면 크롬/락 공유)
         self.grabber: Grabber | None = None
 
     def run(self, stop_event, log=None) -> None:
@@ -147,15 +150,20 @@ class MultiWatcher:
             log(f"   · {sp['mov_nm']} / {sp['site_nm']} / {sp['t'].get('date')} "
                 f"{sp['time'] or '(전체)'} {'/좌석 '+','.join(sp['preferred']) if sp['preferred'] else ''}")
 
-        self.grabber = Grabber(headless=False).__enter__()
-        log("[감시] 크롬에 로그인하세요(이미 되어있으면 자동 통과)...")
-        if not self.grabber.ensure_login(timeout_s=600):
-            log("[감시] 로그인 실패 — 중지"); return
+        if self.hub is not None:
+            self.grabber = self.hub.grabber(log)
+            if not self.hub.ensure_login(log):
+                log("[감시] 로그인 실패 — 중지"); return
+        else:
+            self.grabber = Grabber(headless=False).__enter__()
+            log("[감시] 크롬에 로그인하세요(이미 되어있으면 자동 통과)...")
+            if not self.grabber.ensure_login(timeout_s=600):
+                log("[감시] 로그인 실패 — 중지"); return
         log("[감시] 로그인 확인 → 감시 시작")
 
-        while not stop_event.is_set():
+        while not stop_event.is_set() and not self._held():
             for sp in specs:
-                if stop_event.is_set():
+                if stop_event.is_set() or self._held():
                     break
                 try:
                     shows = cgv_api.fetch_showtimes(sp["mov_no"], sp["site_no"], sp["ymd"])
@@ -172,11 +180,18 @@ class MultiWatcher:
                     continue
                 s = cands[0]
                 log(f"[감시] ▶ {sp['mov_nm']} {s.time} {s.screen} 잔여{s.remaining} → 좌석 잡기")
-                ok, seat, msg = self.grabber.replay(
-                    self.recipe, day=sp["t"].get("date", ""), hhmm=s.time, movie=sp["mov_nm"],
-                    persons=sp["persons"], preferred=sp["preferred"],
-                    only_preferred=sp["only"], prefer=sp["prefer"])
+                # 좌석잡기는 한 번에 하나만(공유 락). 대기 중 이미 다른 대상이 선점했으면 중단.
+                lock = self.hub.book_lock if self.hub is not None else _NULL_LOCK
+                with lock:
+                    if self._held():
+                        break
+                    ok, seat, msg = self.grabber.replay(
+                        self.recipe, day=sp["t"].get("date", ""), hhmm=s.time, movie=sp["mov_nm"],
+                        persons=sp["persons"], preferred=sp["preferred"],
+                        only_preferred=sp["only"], prefer=sp["prefer"])
                 if ok:
+                    if self.hub is not None:
+                        self.hub.held.set()
                     log(f"[감시] ✅ 좌석 선점: {sp['mov_nm']} {seat} — {msg}")
                     if self.notifier:
                         try:
@@ -194,15 +209,17 @@ class MultiWatcher:
             self._sleep_all(interval, stop_event)
         log("[감시] 종료")
 
-    @staticmethod
-    def _sleep_all(seconds: int, stop_event) -> None:
+    def _held(self) -> bool:
+        return self.hub is not None and self.hub.held.is_set()
+
+    def _sleep_all(self, seconds: int, stop_event) -> None:
         waited = 0.0
-        while waited < seconds and not stop_event.is_set():
+        while waited < seconds and not stop_event.is_set() and not self._held():
             time.sleep(0.5)
             waited += 0.5
 
     def close(self) -> None:
-        if self.grabber:
+        if self.grabber and self.hub is None:   # 허브 소유 브라우저는 허브가 닫는다
             try:
                 self.grabber.close()
             except Exception:  # noqa: BLE001

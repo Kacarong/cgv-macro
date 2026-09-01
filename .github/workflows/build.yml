@@ -31,7 +31,7 @@ jobs:
           --hidden-import cgv_macro.watcher --hidden-import cgv_macro.replayer
           --hidden-import cgv_macro.recorder --hidden-import cgv_macro.cgv_api
           --hidden-import cgv_macro.notifier --hidden-import cgv_macro.config
-          --hidden-import cgv_macro.event_watch
+          --hidden-import cgv_macro.event_watch --hidden-import cgv_macro.hub
           app.py
 
       - name: Upload artifact
