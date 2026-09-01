@@ -79,10 +79,9 @@ class EventWatcher:
                 self._sleep(interval, stop_event)
                 continue
             log(f"[무대인사] 스윕 시작 — 상영중 {len(movies)}편 확인")
-            if self._sweep(movies, dates, need, persons, preferred, only, prefer, stop_event, log):
-                return  # 좌석 선점 완료 → 종료
-            if not stop_event.is_set():
-                log(f"[무대인사] 스윕 완료 — 신규 무대인사 없음. {interval}s 후 재스윕")
+            self._sweep(movies, dates, need, persons, preferred, only, prefer, stop_event, log)
+            if not stop_event.is_set() and not self._held():
+                log(f"[무대인사] 스윕 완료 — {interval}s 후 재스윕(계속 감시)")
             self._sleep(interval, stop_event)
         log("[무대인사] 종료")
 
@@ -114,24 +113,27 @@ class EventWatcher:
                                      f"{s.screen} · {label}", f"무대인사 감지: {label}", "")
                         # 자동 좌석 잡기(잔여석 미상(-1)이거나 충분할 때 시도)
                         if s.remaining < 0 or s.remaining >= need:
-                            log(f"[무대인사] 좌석 잡기 시도: {mov_nm} {s.time}")
-                            lock = self.hub.book_lock if self.hub is not None else _NULL_LOCK
-                            with lock:
-                                if self._held():
-                                    return False
-                                ok, seat, msg = self.grabber.replay(
-                                    self.recipe, day=disp, hhmm=s.time, movie=mov_nm,
-                                    persons=persons, preferred=preferred,
-                                    only_preferred=only, prefer=prefer)
-                            if ok:
-                                if self.hub is not None:
-                                    self.hub.held.set()
-                                log(f"[무대인사] ✅ 좌석 선점: {mov_nm} {seat} — {msg}. "
-                                    f"결제 페이지에서 결제하세요.(감시 종료)")
-                                self._notify("seat_held", mov_nm, site_nm, disp, s.time,
-                                             s.screen, msg, seat)
-                                return True
-                            log(f"[무대인사] 미완료: {msg} — 계속 감시")
+                            if self.hub is not None and not self.hub.can_hold():
+                                log(f"[무대인사] 동시 선점 상한({self.hub.max_holds}) 도달 — 알림만")
+                            else:
+                                log(f"[무대인사] 좌석 잡기 시도: {mov_nm} {s.time}")
+                                lock = self.hub.book_lock if self.hub is not None else _NULL_LOCK
+                                page = self.hub.new_grab_page() if self.hub is not None else None
+                                with lock:
+                                    if self._held():
+                                        return False
+                                    ok, seat, msg = self.grabber.replay(
+                                        self.recipe, day=disp, hhmm=s.time, movie=mov_nm,
+                                        persons=persons, preferred=preferred,
+                                        only_preferred=only, prefer=prefer, page=page)
+                                if ok:
+                                    n = self.hub.add_hold() if self.hub is not None else 1
+                                    log(f"[무대인사] ✅ 좌석 선점: {mov_nm} {seat} — {msg} "
+                                        f"(선점 {n}개, 감시 계속)")
+                                    self._notify("seat_held", mov_nm, site_nm, disp, s.time,
+                                                 s.screen, msg, seat)
+                                else:
+                                    log(f"[무대인사] 미완료: {msg} — 계속 감시")
                         else:
                             log(f"[무대인사] 잔여 {s.remaining}석 < 필요 {need}석 — 알림만")
         return False

@@ -121,6 +121,7 @@ class MultiWatcher:
         self.notifier = notifier
         self.hub = hub                       # 공유 브라우저 허브(있으면 크롬/락 공유)
         self.grabber: Grabber | None = None
+        self.grabbed: set[str] = set()       # 이미 선점한 회차키(중복 선점 방지)
 
     def run(self, stop_event, log=None) -> None:
         log = log or logger.info
@@ -175,24 +176,30 @@ class MultiWatcher:
                     if s.remaining >= sp["need"]
                     and (not sp["time"] or s.time == sp["time"])
                     and (not sp["screen"] or sp["screen"].lower() in (s.screen + " " + s.fmt).lower())
+                    and s.showtime_key() not in self.grabbed
                 ]
                 if not cands:
                     continue
                 s = cands[0]
+                # 동시 선점 상한 체크
+                if self.hub is not None and not self.hub.can_hold():
+                    log(f"[감시] 동시 선점 상한({self.hub.max_holds}) 도달 — 결제/닫기 후 재개")
+                    continue
                 log(f"[감시] ▶ {sp['mov_nm']} {s.time} {s.screen} 잔여{s.remaining} → 좌석 잡기")
-                # 좌석잡기는 한 번에 하나만(공유 락). 대기 중 이미 다른 대상이 선점했으면 중단.
+                self.grabbed.add(s.showtime_key())   # 같은 회차 중복 선점 방지
+                # DOM 조작은 공유 락으로 하나씩(결과 탭은 각자 유지 → 동시 선점).
                 lock = self.hub.book_lock if self.hub is not None else _NULL_LOCK
+                page = self.hub.new_grab_page() if self.hub is not None else None
                 with lock:
                     if self._held():
                         break
                     ok, seat, msg = self.grabber.replay(
                         self.recipe, day=sp["t"].get("date", ""), hhmm=s.time, movie=sp["mov_nm"],
                         persons=sp["persons"], preferred=sp["preferred"],
-                        only_preferred=sp["only"], prefer=sp["prefer"])
+                        only_preferred=sp["only"], prefer=sp["prefer"], page=page)
                 if ok:
-                    if self.hub is not None:
-                        self.hub.held.set()
-                    log(f"[감시] ✅ 좌석 선점: {sp['mov_nm']} {seat} — {msg}")
+                    n = self.hub.add_hold() if self.hub is not None else 1
+                    log(f"[감시] ✅ 좌석 선점: {sp['mov_nm']} {seat} — {msg} (선점 {n}개, 감시 계속)")
                     if self.notifier:
                         try:
                             self.notifier.notify_showtime(
@@ -202,9 +209,8 @@ class MultiWatcher:
                                 booking_url="https://cgv.co.kr/cnm/movieBook/cinema")
                         except Exception:  # noqa: BLE001
                             pass
-                    log("[감시] 좌석을 잡았습니다. 결제 페이지에서 결제하세요. (감시 종료)")
-                    return
                 else:
+                    self.grabbed.discard(s.showtime_key())   # 실패 → 재시도 허용
                     log(f"[감시] {sp['mov_nm']} 미완료: {msg}")
             self._sleep_all(interval, stop_event)
         log("[감시] 종료")

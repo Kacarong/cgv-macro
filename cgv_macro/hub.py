@@ -20,10 +20,26 @@ class WatchHub:
     def __init__(self) -> None:
         self._grabber: Grabber | None = None
         self._launch_lock = threading.Lock()
-        self.book_lock = threading.Lock()   # 동시에 하나만 좌석잡기
-        self.held = threading.Event()       # 좌석 선점 완료 → 모든 감시 중단 신호
+        self.book_lock = threading.Lock()   # 좌석잡기 DOM 조작은 한 번에 하나(탭은 각각 유지)
+        self.held = threading.Event()       # 사용자 중지/종료 신호(모든 감시 정지)
         self.logged_in = False
         self._login_lost_notified = False
+        self._holds_lock = threading.Lock()
+        self.holds = 0                      # 현재 선점(결제창 대기)한 탭 수
+        self.max_holds = 5                  # 동시 선점 상한(런어웨이 탭 방지)
+
+    def new_grab_page(self):
+        """좌석잡기용 새 탭. 여러 개를 동시에 선점(각 결제창 유지)하기 위함."""
+        return self.grabber().new_page()
+
+    def can_hold(self) -> bool:
+        with self._holds_lock:
+            return self.holds < self.max_holds
+
+    def add_hold(self) -> int:
+        with self._holds_lock:
+            self.holds += 1
+            return self.holds
 
     def grabber(self, log=None) -> Grabber:
         with self._launch_lock:
@@ -88,4 +104,6 @@ class WatchHub:
             self._grabber = None
             self.logged_in = False
             self._login_lost_notified = False
+        with self._holds_lock:
+            self.holds = 0
         self.held.clear()

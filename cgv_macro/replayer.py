@@ -117,6 +117,12 @@ class Grabber:
     def __exit__(self, *exc) -> None:
         pass
 
+    def new_page(self):
+        """동시 선점용 새 탭. 같은 컨텍스트라 로그인 세션을 공유한다."""
+        pg = self._ctx.new_page()
+        pg.set_default_timeout(9000)
+        return pg
+
     def close(self) -> None:
         try:
             if self._ctx:
@@ -125,15 +131,15 @@ class Grabber:
             if self._pw:
                 self._pw.stop()
 
-    def _shot(self, name: str) -> None:
+    def _shot(self, page, name: str) -> None:
         try:
-            self.page.screenshot(path=os.path.join(paths.data_dir(), f"grab_{name}.png"))
+            page.screenshot(path=os.path.join(paths.data_dir(), f"grab_{name}.png"))
         except Exception:  # noqa: BLE001
             pass
 
-    def _wait_visitor(self, timeout_ms: int) -> bool:
+    def _wait_visitor(self, page, timeout_ms: int) -> bool:
         """회차 클릭 후 인원/좌석 화면(selectVisitorCnt)으로 넘어갔는지 확인."""
-        p = self.page
+        p = page
         waited = 0
         while waited < timeout_ms:
             if "selectVisitorCnt" in p.url:
@@ -175,11 +181,12 @@ class Grabber:
 
     def replay(self, recipe: dict, day: str, hhmm: str, movie: str = "",
                persons: dict | None = None, preferred: list[str] | None = None,
-               only_preferred: bool = False, prefer: str = "center") -> tuple[bool, str, str]:
+               only_preferred: bool = False, prefer: str = "center",
+               page=None) -> tuple[bool, str, str]:
         persons = {k: int(v) for k, v in (persons or {"일반": 2}).items() if int(v) > 0}
         total = sum(persons.values()) or 1
         preferred = [s.strip().upper() for s in (preferred or [])]
-        p = self.page
+        p = page or self.page
         m = re.findall(r"\d+", day or "")
         day_num = str(int(m[-1])) if m else ""
         logger.info("[replay] 대상 날짜=%s(일=%s) 시간=%s 영화=%s",
@@ -253,7 +260,7 @@ class Grabber:
                         p.wait_for_timeout(300)
                     logger.info("[replay] 회차 표식: %s", r)
                     if not str(r).startswith("ok"):
-                        self._shot("showtime")
+                        self._shot(p, "showtime")
                         return False, "", f"회차 {hhmm} 못 찾음 — 그 날 그 시간 회차가 실제로 있는지 확인하세요"
                     loc = p.locator("[data-ap='1']").first
                     try:
@@ -262,27 +269,27 @@ class Grabber:
                         pass
                     loc.click(timeout=7000)
                     # 예매(인원) 화면으로 실제 전환됐는지 확인 — 안 넘어가면 좌표 실클릭 재시도
-                    if not self._wait_visitor(4000):
+                    if not self._wait_visitor(p, 4000):
                         try:
                             box = loc.bounding_box()
                             if box:
                                 p.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
                         except Exception:  # noqa: BLE001
                             pass
-                        if not self._wait_visitor(6000):
-                            self._shot("showtime")
+                        if not self._wait_visitor(p, 6000):
+                            self._shot(p, "showtime")
                             return False, "", "회차 클릭했으나 예매(인원)로 전환 안 됨 — 로그인/대기열 확인"
                     logger.info("[replay] 예매(인원) 진입 OK")
 
                 elif kind == "person":
                     if not done["person"]:
-                        self._pick_persons(persons)
+                        self._pick_persons(p, persons)
                         done["person"] = True
                     # 이후 중복 person 스텝은 건너뜀
 
                 elif kind == "seat":
                     if not done["seat"]:
-                        ok, seat_str, msg = self._pick_seats(total, prefer, preferred, only_preferred)
+                        ok, seat_str, msg = self._pick_seats(p, total, prefer, preferred, only_preferred)
                         if not ok:
                             return False, "", msg
                         done["seat"] = True
@@ -348,7 +355,7 @@ class Grabber:
                                 if _pay_page() or not _confirm_open():
                                     break
                                 p.wait_for_timeout(120)
-                        self._shot("payment")
+                        self._shot(p, "payment")
                         logger.info("[replay] 결제 진행 결과: 결제수단페이지=%s", _pay_page())
                         return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
                     r = p.evaluate(CLICK_TEXT_JS, {"txt": txt, "cls": step.get("cls", "")})
@@ -356,16 +363,16 @@ class Grabber:
                 p.wait_for_timeout(450)
 
             # 결제하기 스텝이 없었으면 여기까지 = 선택완료 상태
-            self._shot("done")
+            self._shot(p, "done")
             return True, seat_str, "좌석 선택 완료(결제하기까지 녹화에 없었음)."
         except Exception as e:  # noqa: BLE001
-            self._shot("error")
+            self._shot(p, "error")
             logger.error("[replay] 실패: %s", e)
             return False, "", f"재생 오류: {e}"
 
     # ---- 하위 동작 ----
-    def _pick_persons(self, persons: dict) -> None:
-        p = self.page
+    def _pick_persons(self, page, persons: dict) -> None:
+        p = page
         pick_js = r"""(a)=>{const {label,n}=a;
           const rows=[...document.querySelectorAll('*')].filter(e=>{
             const t=e.textContent||''; return t.includes(label)&&e.querySelector('button.btn-num');});
@@ -378,14 +385,14 @@ class Grabber:
             logger.info("[replay] 인원 %s %d명 → %s", label, n, r)
             p.wait_for_timeout(300)
 
-    def _pick_seats(self, total: int, prefer: str, preferred: list[str],
+    def _pick_seats(self, page, total: int, prefer: str, preferred: list[str],
                     only_preferred: bool) -> tuple[bool, str, str]:
-        p = self.page
+        p = page
         seats = p.locator(SEL_SEAT_OK)
         sn = seats.count()
         logger.info("[replay] 빈 좌석 %d개 (필요 %d)", sn, total)
         if sn == 0:
-            self._shot("seat"); return False, "", "빈 좌석 없음 — 계속 감시"
+            self._shot(p, "seat"); return False, "", "빈 좌석 없음 — 계속 감시"
 
         def label(el):
             return (el.inner_text() or "").strip().upper()
@@ -399,7 +406,7 @@ class Grabber:
                     chosen.append(idx)
             if only_preferred and len(chosen) < total:
                 got = [lb for lb in preferred if lb in avail]
-                self._shot("seat")
+                self._shot(p, "seat")
                 return False, "", f"원하는 좌석 대기중(가능:{','.join(got) or '없음'}/필요 {total})"
         if len(chosen) < total:
             pool = [idx for _, idx in labels if idx not in chosen]
