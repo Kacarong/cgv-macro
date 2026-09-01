@@ -1,0 +1,46 @@
+name: build-exe
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build exe
+        run: >
+          pyinstaller --noconfirm --onefile --windowed --name CGV-Seat-Watcher
+          --collect-all playwright --collect-all customtkinter
+          --hidden-import cgv_macro.watcher --hidden-import cgv_macro.replayer
+          --hidden-import cgv_macro.recorder --hidden-import cgv_macro.cgv_api
+          --hidden-import cgv_macro.notifier --hidden-import cgv_macro.config
+          app.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CGV-Seat-Watcher
+          path: dist/CGV-Seat-Watcher.exe
+
+      - name: Publish to Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/CGV-Seat-Watcher.exe
