@@ -254,8 +254,9 @@ class App(ctk.CTk):
         self.e_ment = ctk.CTkEntry(drow, placeholder_text="멘션 ID", width=140, fg_color="#2A2A30")
         self.e_ment.pack(side="left")
 
-        self._note(sett, "로그인 준비: 크롬을 띄워 1회 로그인하면 세션이 프로필에 저장됩니다. 이후에는 자리에 없어도\n"
-                         "감지 시 자동으로 로그인된 상태로 좌석을 잡습니다. 모든 감시는 크롬 1개를 공유합니다.")
+        self._note(sett, "권장 사용법: 프로그램을 켜면 하단 '① 로그인 준비'로 크롬을 띄워 1회 로그인하고 그 창을 그대로 두세요.\n"
+                         "그 크롬 1개를 계속 재사용하므로 캡챠·재로그인이 필요 없습니다. '중지'해도 크롬은 로그인된 채 열려 있고,\n"
+                         "프로그램을 완전히 닫을 때만 크롬이 닫힙니다. 모든 감시(취소표/오픈/무대인사)가 이 크롬 1개를 공유합니다.")
 
     # ---------- 데이터 로드 ----------
     def _load_lists(self):
@@ -540,26 +541,30 @@ class App(ctk.CTk):
         self.stat.configure(text="● 중지 중…", text_color="#E0A030")
 
     def _watch_ended(self):
+        # 감시만 멈추고 크롬(로그인 세션)은 그대로 열어둔다 → 재시작 시 재로그인 불필요.
+        # 브라우저는 프로그램 종료(_on_close) 때만 닫는다.
         for w in self.workers:
             try:
-                w.close()
+                w.close()   # hub 소유 브라우저는 닫지 않음(watcher.close 가 hub면 skip)
             except Exception:  # noqa: BLE001
                 pass
         self.workers = []
-        if self.hub:
-            try:
-                self.hub.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self.hub = None
         self.b_start.configure(state="normal")
         self.b_stop.configure(state="disabled", fg_color="#33333A")
-        self.stat.configure(text="● 대기", text_color=SUB)
+        if self.hub and self.hub.logged_in:
+            self.stat.configure(text="● 대기(로그인 유지)", text_color=GREEN)
+            self._put("감시 중지 — 크롬은 로그인된 채 열려 있습니다. 다시 '감시 시작'하면 재로그인 없이 진행돼요.")
+        else:
+            self.stat.configure(text="● 대기", text_color=SUB)
 
     def _on_close(self):
         self.watch_stop.set(); self.rec_stop.set()
         if self.hub:
             self.hub.held.set()
+            try:
+                self.hub.close()   # 프로그램 종료 시에만 크롬 닫기
+            except Exception:  # noqa: BLE001
+                pass
         self.destroy()
 
 
