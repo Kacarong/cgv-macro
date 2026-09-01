@@ -109,6 +109,23 @@ class WatchHub:
             return ok, seat, msg
         return self._submit(job)
 
+    def keepalive(self) -> None:
+        """세션 유휴 만료 방지 — 컨트롤 탭을 예매 페이지로 새로고침(활동 신호)."""
+        if self.held.is_set() or self._grabber is None or not self.logged_in:
+            return
+
+        def job():
+            from .replayer import CINEMA_URL
+            try:
+                self._grabber.page.goto(CINEMA_URL, wait_until="domcontentloaded")
+            except Exception:  # noqa: BLE001
+                pass
+
+        try:
+            self._submit(job)
+        except Exception:  # noqa: BLE001
+            pass
+
     def recheck_login(self, log=None, notifier=None) -> bool:
         if self.held.is_set() or not self.logged_in:
             return True

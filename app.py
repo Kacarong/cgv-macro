@@ -59,6 +59,7 @@ class App(ctk.CTk):
         self.workers: list = []
         self._active = 0
         self._notifier = None
+        self._wd_tick = 0
 
         self.cancel_list: list[dict] = []      # 취소표 감지 대상
         self.open_list: list[dict] = []        # 상영오픈 감지 대상
@@ -259,8 +260,8 @@ class App(ctk.CTk):
         self._note(sett, "권장 사용법: '① 로그인 준비'로 크롬을 띄워 1회 로그인하고 그 창을 그대로 두세요. 크롬 1개를 계속\n"
                          "재사용하므로 재로그인이 거의 필요 없습니다. '중지'해도 크롬은 로그인된 채 유지, 프로그램 종료 때만 닫힙니다.\n"
                          "\n"
-                         "★24시간 무인 운용: 로그인 화면에 '로그인 유지/자동로그인'이 있으면 꼭 체크하세요(세션이 며칠 유지됨).\n"
-                         "앱이 3분마다 CGV에 접속해 세션을 살려두고(keep-alive), 만약 풀리면 로그·디스코드로 '로그인 필요' 알림을 줍니다.\n"
+                         "24시간 무인 운용: 앱이 2분마다 CGV 예매 페이지에 접속해 세션을 살려두고(keep-alive), 6분마다 로그인\n"
+                         "상태를 점검해 풀리면 로그·디스코드로 '로그인 필요' 알림을 줍니다. (CGV는 자동로그인이 없어 keep-alive로 유지)\n"
                          "\n"
                          "동시 선점: 하나를 잡아도 감시는 계속되고, 잡을 때마다 '새 탭'으로 서로 다른 회차의 결제창을 동시에\n"
                          "유지합니다(최대 5개). 다만 CGV가 한 계정 동시 예매를 막으면 나중 것이 앞 것을 밀어낼 수 있어요(그땐 계정 분리 필요).")
@@ -471,8 +472,7 @@ class App(ctk.CTk):
         from cgv_macro.hub import WatchHub
         if self.hub is None:
             self.hub = WatchHub()
-        self._put("[로그인] 크롬을 띄웁니다. ★로그인 화면에 '로그인 유지/자동로그인'이 있으면 꼭 체크하세요"
-                  " (24시간 무인 운용의 핵심 — 세션이 며칠 유지됩니다). 로그인 후 창은 그대로 두세요.")
+        self._put("[로그인] 크롬을 띄웁니다. 로그인 후 창은 그대로 두세요. 앱이 2분마다 세션을 살려둡니다(keep-alive).")
 
         def worker():
             try:
@@ -495,14 +495,20 @@ class App(ctk.CTk):
             self.stat.configure(text="● 대기", text_color=SUB)
 
     def _login_watchdog(self):
-        # 로그인돼 있으면 감시 중이 아니어도 주기적으로 세션을 살려둔다(유휴 만료 방지 + 로그아웃 감지).
+        # 2분마다 세션 유지(예매 페이지 새로고침), 6분마다 로그인 상태 점검(+풀리면 알림).
         if self.hub and self.hub.logged_in and not self.hub.held.is_set():
+            self._wd_tick += 1
+            tick = self._wd_tick
+
             def w():
-                ok = self.hub.recheck_login(self._put, self._notifier)
-                if not ok:
-                    self.after(0, lambda: self.stat.configure(text="● 로그인 필요", text_color=RED))
+                if tick % 3 == 0:
+                    ok = self.hub.recheck_login(self._put, self._notifier)
+                    if not ok:
+                        self.after(0, lambda: self.stat.configure(text="● 로그인 필요", text_color=RED))
+                else:
+                    self.hub.keepalive()
             threading.Thread(target=w, daemon=True).start()
-        self.after(180000, self._login_watchdog)   # 3분마다 keep-alive
+        self.after(120000, self._login_watchdog)   # 2분
 
     # ---------- 감시 ----------
     def _watch_start(self):
