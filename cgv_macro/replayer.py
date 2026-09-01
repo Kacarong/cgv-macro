@@ -95,16 +95,41 @@ def _classify(step: dict) -> str:
     return "literal"
 
 
+def clone_profile(idx: int) -> str:
+    """마스터 로그인 프로필(PROFILE)을 대상별 폴더로 복제(로그인 세션 공유).
+    각 대상이 '독립된 크롬 창'을 갖도록 profile 폴더를 분리한다. 캐시/락 파일은 제외."""
+    import shutil
+    dst = os.path.join(paths.data_dir(), f"chrome-profile-{idx}")
+    shutil.rmtree(dst, ignore_errors=True)
+    if os.path.isdir(PROFILE):
+        ignore = shutil.ignore_patterns(
+            "Singleton*", "Cache", "Code Cache", "GPUCache", "ShaderCache",
+            "GrShaderCache", "DawnCache", "Crashpad", "*.log", "*-journal")
+        try:
+            shutil.copytree(PROFILE, dst, ignore=ignore, dirs_exist_ok=True)
+        except Exception:  # noqa: BLE001
+            os.makedirs(dst, exist_ok=True)
+    else:
+        os.makedirs(dst, exist_ok=True)
+    for lock in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        try:
+            os.remove(os.path.join(dst, lock))
+        except OSError:
+            pass
+    return dst
+
+
 class Grabber:
-    def __init__(self, headless: bool = False) -> None:
+    def __init__(self, headless: bool = False, profile_dir: str | None = None) -> None:
         self.headless = headless
+        self.profile = profile_dir or PROFILE
         self._pw = None
         self._ctx = None
         self.page = None
 
     def __enter__(self) -> "Grabber":
         self._pw = sync_playwright().start()
-        kw = dict(user_data_dir=PROFILE, headless=self.headless, locale="ko-KR",
+        kw = dict(user_data_dir=self.profile, headless=self.headless, locale="ko-KR",
                   viewport={"width": 1440, "height": 960}, args=["--start-maximized"])
         try:
             self._ctx = self._pw.chromium.launch_persistent_context(channel="chrome", **kw)

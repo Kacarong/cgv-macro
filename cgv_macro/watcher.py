@@ -22,20 +22,27 @@ def _scnymd(date: str) -> str:
 
 
 class Watcher:
-    def __init__(self, recipe: dict, target: dict, notifier=None) -> None:
+    """대상 1개를 '독립된 크롬 창 1개'에서 감시·선점. 성공하면 그 창을 결제창으로 유지."""
+
+    def __init__(self, recipe: dict, target: dict, notifier=None,
+                 profile_dir: str | None = None, tag: str = "감시") -> None:
         self.recipe = recipe
         self.t = target
         self.notifier = notifier
+        self.profile_dir = profile_dir
+        self.tag = tag
         self.grabber: Grabber | None = None
+        self.held_payment = False   # 좌석 선점(결제창 도달) 여부
 
     def run(self, stop_event, log=None) -> None:
         log = log or logger.info
+        tag = self.tag
         t = self.t
         try:
             mov_no, mov_nm = cgv_api.resolve_movie(t.get("movie", ""), t.get("movie_code", ""))
             site_no, site_nm, _region = cgv_api.resolve_theater(t.get("theater", ""), t.get("theater_code", ""))
         except Exception as e:  # noqa: BLE001
-            log(f"[감시] 영화/극장 해석 실패: {e}")
+            log(f"[{tag}] 영화/극장 해석 실패: {e}")
             return
         target_time = (t.get("time") or "").strip()
         persons = {k: int(v) for k, v in (t.get("persons") or {"일반": 2}).items() if int(v) > 0}
@@ -46,22 +53,25 @@ class Watcher:
         interval = max(5, int(t.get("interval", 10)))
         screen_type = (t.get("screen_type") or "").strip()
 
-        log(f"[감시] 대상: {mov_nm} / {site_nm} / {t.get('date')} "
+        log(f"[{tag}] 창 열기: {mov_nm} / {site_nm} / {t.get('date')} "
             f"{target_time or '(전체 회차)'} / 좌석 {need}석 "
             f"{'/ 원하는좌석 '+','.join(preferred) if preferred else ''}")
 
-        self.grabber = Grabber(headless=False).__enter__()
-        log("[감시] 크롬에 로그인하세요(이미 로그인돼 있으면 자동 통과)...")
-        if not self.grabber.ensure_login(timeout_s=600):
-            log("[감시] 로그인/극장별예매 진입 실패 — 중지")
+        try:
+            self.grabber = Grabber(headless=False, profile_dir=self.profile_dir).__enter__()
+        except Exception as e:  # noqa: BLE001
+            log(f"[{tag}] 크롬 실행 실패: {e}")
             return
-        log("[감시] 로그인 확인 → 감시 시작")
+        if not self.grabber.ensure_login(timeout_s=600):
+            log(f"[{tag}] 로그인 안 됨 — 이 창에서 로그인하거나 '로그인 준비'를 다시 하세요")
+            return
+        log(f"[{tag}] 로그인 확인 → 감시 시작")
 
         while not stop_event.is_set():
             try:
                 shows = cgv_api.fetch_showtimes(mov_no, site_no, _scnymd(t.get("date", "")))
             except Exception as e:  # noqa: BLE001
-                log(f"[감시] 조회 오류: {e}")
+                log(f"[{tag}] 조회 오류: {e}")
                 self._sleep(interval, stop_event)
                 continue
 
@@ -73,29 +83,33 @@ class Watcher:
             ]
             if cands:
                 s = cands[0]
-                log(f"[감시] 예매가능 감지: {s.time} {s.screen} 잔여{s.remaining} → 좌석 잡기 시도")
-                ok, seat, msg = self.grabber.replay(
-                    self.recipe, day=t.get("date", ""), hhmm=s.time, movie=mov_nm,
-                    persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer)
+                log(f"[{tag}] 예매가능 감지: {s.time} {s.screen} 잔여{s.remaining} → 좌석 잡기 시도")
+                try:
+                    ok, seat, msg = self.grabber.replay(
+                        self.recipe, day=t.get("date", ""), hhmm=s.time, movie=mov_nm,
+                        persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer)
+                except Exception as e:  # noqa: BLE001
+                    ok, seat, msg = False, "", f"좌석잡기 오류: {e}"
                 if ok:
-                    log(f"[감시] ✅ 좌석 선점 완료: {seat} — {msg}")
+                    self.held_payment = True
+                    log(f"[{tag}] ✅ 좌석 선점 완료: {seat} — {msg} (이 창은 결제용으로 유지)")
                     if self.notifier:
                         try:
                             self.notifier.notify_showtime(
-                                kind="seat_held", target_name=t.get("name", "대상"),
+                                kind="seat_held", target_name=t.get("name", mov_nm),
                                 movie=mov_nm, theater=site_nm, date=t.get("date", ""),
                                 showtime=s.time, screen=f"{s.screen} ({s.fmt})",
                                 status_text=msg, seat_info=seat,
                                 booking_url="https://cgv.co.kr/cnm/movieBook/cinema")
                         except Exception:  # noqa: BLE001
                             pass
-                    break
+                    break   # 이 창은 결제창으로 남기고 이 대상 감시 종료
                 else:
-                    log(f"[감시] 미완료: {msg}")
+                    log(f"[{tag}] 미완료: {msg}")
             else:
-                log(f"[감시] 대기중 — 예매가능 회차 없음")
+                log(f"[{tag}] 대기중 — 예매가능 회차 없음")
             self._sleep(interval, stop_event)
-        log("[감시] 종료")
+        log(f"[{tag}] 종료")
 
     @staticmethod
     def _sleep(seconds: int, stop_event) -> None:

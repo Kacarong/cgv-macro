@@ -26,19 +26,23 @@ _NULL_LOCK = nullcontext()
 
 class EventWatcher:
     def __init__(self, recipe: dict, theaters: list[tuple[str, str]],
-                 base: dict, notifier=None, days: int = 7, hub=None) -> None:
+                 base: dict, notifier=None, days: int = 7,
+                 profile_dir: str | None = None, tag: str = "무대인사") -> None:
         # theaters: [(siteNo, siteNm), ...]
         self.recipe = recipe
         self.theaters = theaters
         self.base = base or {}
         self.notifier = notifier
         self.days = max(1, min(int(days), 21))
-        self.hub = hub
+        self.profile_dir = profile_dir
+        self.tag = tag
         self.grabber: Grabber | None = None
         self.seen: set[str] = set()
+        self.occupied = False        # 이 창이 이미 결제창을 점유했는지
+        self.held_payment = False
 
     def _held(self) -> bool:
-        return self.hub is not None and self.hub.held.is_set()
+        return False
 
     def run(self, stop_event, log=None) -> None:
         log = log or logger.info
@@ -58,17 +62,15 @@ class EventWatcher:
         log(f"[무대인사] 감지 시작 — 극장 {len(self.theaters)}곳({th_names}) × 향후 {self.days}일 "
             f"× 상영중 전체영화 (주기 {interval}s, 좌석 {need}석)")
 
-        if self.hub is not None:
-            if not self.hub.ensure_login(log):
-                log("[무대인사] 로그인 실패 — 중지")
-                return
-        else:
-            self.grabber = Grabber(headless=False).__enter__()
-            log("[무대인사] 크롬에 로그인하세요(이미 되어있으면 자동 통과)...")
-            if not self.grabber.ensure_login(timeout_s=600):
-                log("[무대인사] 로그인 실패 — 중지")
-                return
-        log("[무대인사] 로그인 확인 → 감시 시작")
+        try:
+            self.grabber = Grabber(headless=False, profile_dir=self.profile_dir).__enter__()
+        except Exception as e:  # noqa: BLE001
+            log(f"[{self.tag}] 크롬 실행 실패: {e}")
+            return
+        if not self.grabber.ensure_login(timeout_s=600):
+            log(f"[{self.tag}] 로그인 안 됨 — 이 창에서 로그인하거나 '로그인 준비'를 다시 하세요")
+            return
+        log(f"[{self.tag}] 로그인 확인 → 감시 시작")
 
         while not stop_event.is_set() and not self._held():
             try:
@@ -106,40 +108,35 @@ class EventWatcher:
                         if key in self.seen:
                             continue
                         self.seen.add(key)
-                        log(f"[무대인사] 🎤 발견: {mov_nm} / {site_nm} / {disp} {s.time} "
+                        log(f"[{self.tag}] 🎤 발견: {mov_nm} / {site_nm} / {disp} {s.time} "
                             f"{s.screen} 잔여{s.remaining} — {label}")
                         self._notify("stage_event", mov_nm, site_nm, disp, s.time,
                                      f"{s.screen} · {label}", f"무대인사 감지: {label}", "")
+                        # 이미 이 창이 결제창을 점유했으면 추가 선점은 안 함(알림만)
+                        if self.occupied:
+                            log(f"[{self.tag}] 이미 선점한 결제창이 있어 알림만(감시 계속)")
+                            continue
                         # 자동 좌석 잡기(잔여석 미상(-1)이거나 충분할 때 시도)
                         if s.remaining < 0 or s.remaining >= need:
-                            if self.hub is not None and not self.hub.can_hold():
-                                log(f"[무대인사] 동시 선점 상한({self.hub.max_holds}) 도달 — 알림만")
+                            log(f"[{self.tag}] 좌석 잡기 시도: {mov_nm} {s.time}")
+                            try:
+                                ok, seat, msg = self.grabber.replay(
+                                    self.recipe, day=disp, hhmm=s.time, movie=mov_nm,
+                                    persons=persons, preferred=preferred,
+                                    only_preferred=only, prefer=prefer)
+                            except Exception as e:  # noqa: BLE001
+                                ok, seat, msg = False, "", f"좌석잡기 오류: {e}"
+                            if ok:
+                                self.occupied = True
+                                self.held_payment = True
+                                log(f"[{self.tag}] ✅ 좌석 선점: {mov_nm} {seat} — {msg} "
+                                    f"(이 창은 결제용 유지, 감시 계속)")
+                                self._notify("seat_held", mov_nm, site_nm, disp, s.time,
+                                             s.screen, msg, seat)
                             else:
-                                log(f"[무대인사] 좌석 잡기 시도: {mov_nm} {s.time}")
-                                if self._held():
-                                    return False
-                                try:
-                                    if self.hub is not None:
-                                        ok, seat, msg = self.hub.grab(
-                                            self.recipe, disp, s.time, mov_nm,
-                                            persons, preferred, only, prefer)
-                                    else:
-                                        ok, seat, msg = self.grabber.replay(
-                                            self.recipe, day=disp, hhmm=s.time, movie=mov_nm,
-                                            persons=persons, preferred=preferred,
-                                            only_preferred=only, prefer=prefer)
-                                except Exception as e:  # noqa: BLE001
-                                    ok, seat, msg = False, "", f"좌석잡기 오류: {e}"
-                                if ok:
-                                    n = self.hub.add_hold() if self.hub is not None else 1
-                                    log(f"[무대인사] ✅ 좌석 선점: {mov_nm} {seat} — {msg} "
-                                        f"(선점 {n}개, 감시 계속)")
-                                    self._notify("seat_held", mov_nm, site_nm, disp, s.time,
-                                                 s.screen, msg, seat)
-                                else:
-                                    log(f"[무대인사] 미완료: {msg} — 계속 감시")
+                                log(f"[{self.tag}] 미완료: {msg} — 계속 감시")
                         else:
-                            log(f"[무대인사] 잔여 {s.remaining}석 < 필요 {need}석 — 알림만")
+                            log(f"[{self.tag}] 잔여 {s.remaining}석 < 필요 {need}석 — 알림만")
         return False
 
     def _notify(self, kind, movie, theater, disp, hhmm, screen, status, seat) -> None:
@@ -160,7 +157,7 @@ class EventWatcher:
             waited += 0.5
 
     def close(self) -> None:
-        if self.grabber and self.hub is None:   # 허브 소유 브라우저는 허브가 닫는다
+        if self.grabber:
             try:
                 self.grabber.close()
             except Exception:  # noqa: BLE001
