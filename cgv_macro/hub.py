@@ -1,84 +1,113 @@
 """
 모든 감시(취소표·상영오픈·무대인사)가 공유하는 단일 브라우저 허브.
 
-- 크롬(persistent profile)은 딱 1개만 띄운다 → 같은 프로필 중복 실행 잠금 오류 방지.
-- 로그인은 1회만(프로필에 세션 저장 → 자리에 없어도 자동 로그인 상태).
-- 좌석 잡기는 book_lock 으로 직렬화 → 여러 대상이 거의 동시에 감지돼도
-  한 번에 하나만 예매하고, 하나 선점되면 held 로 전체 감시를 멈춘다.
+핵심: Playwright 동기 API는 '브라우저를 만든 스레드'에서만 조작할 수 있다.
+그래서 브라우저 전용 스레드 1개를 두고, 로그인/좌석잡기/로그인점검 등 모든
+브라우저 작업을 큐로 그 스레드에 넘겨 실행한다(자연히 하나씩 직렬 실행).
+감시 스레드들은 결과만 기다린다 → 'cannot switch to a different thread' 해결.
+
+- 크롬(persistent profile)은 1개만. 로그인 1회 → 프로필 세션 유지(자리 비워도 자동).
+- 좌석잡기는 잡을 때마다 '새 탭'에서 진행 → 여러 개 동시 선점(각 결제창 유지).
+- held 는 사용자 중지/종료 신호(모든 감시 정지).
 """
 from __future__ import annotations
 
 import logging
+import queue
 import threading
-
-from .replayer import Grabber
 
 logger = logging.getLogger("cgv_macro")
 
 
 class WatchHub:
     def __init__(self) -> None:
-        self._grabber: Grabber | None = None
-        self._launch_lock = threading.Lock()
-        self.book_lock = threading.Lock()   # 좌석잡기 DOM 조작은 한 번에 하나(탭은 각각 유지)
-        self.held = threading.Event()       # 사용자 중지/종료 신호(모든 감시 정지)
+        self._q: "queue.Queue" = queue.Queue()
+        self._thread = threading.Thread(target=self._loop, name="cgv-browser", daemon=True)
+        self._thread.start()
+        self._grabber = None
+        self._closed = False
+
+        self.held = threading.Event()       # 사용자 중지/종료 신호
         self.logged_in = False
         self._login_lost_notified = False
+
         self._holds_lock = threading.Lock()
         self.holds = 0                      # 현재 선점(결제창 대기)한 탭 수
-        self.max_holds = 5                  # 동시 선점 상한(런어웨이 탭 방지)
+        self.max_holds = 5
 
-    def new_grab_page(self):
-        """좌석잡기용 새 탭. 여러 개를 동시에 선점(각 결제창 유지)하기 위함."""
-        return self.grabber().new_page()
+    # ---- 브라우저 전용 스레드 ----
+    def _loop(self) -> None:
+        while True:
+            item = self._q.get()
+            if item is None:
+                break
+            fn, box = item
+            try:
+                box["result"] = fn()
+            except Exception as e:  # noqa: BLE001
+                box["error"] = e
+            finally:
+                box["done"].set()
 
-    def can_hold(self) -> bool:
-        with self._holds_lock:
-            return self.holds < self.max_holds
+    def _submit(self, fn):
+        """브라우저 스레드에서 fn 실행하고 결과 반환(블로킹)."""
+        if self._closed:
+            raise RuntimeError("hub closed")
+        box: dict = {"done": threading.Event()}
+        self._q.put((fn, box))
+        box["done"].wait()
+        if "error" in box:
+            raise box["error"]
+        return box.get("result")
 
-    def add_hold(self) -> int:
-        with self._holds_lock:
-            self.holds += 1
-            return self.holds
+    def _ensure_grabber(self):
+        # 반드시 브라우저 스레드 안에서 호출됨
+        if self._grabber is None:
+            from .replayer import Grabber
+            self._grabber = Grabber(headless=False).__enter__()
+        return self._grabber
 
-    def grabber(self, log=None) -> Grabber:
-        with self._launch_lock:
-            if self._grabber is None:
-                if log:
-                    log("[브라우저] 크롬 실행 중…")
-                self._grabber = Grabber(headless=False).__enter__()
-            return self._grabber
-
+    # ---- 감시 스레드에서 호출하는 공개 API ----
     def ensure_login(self, log=None, timeout_s: int = 600) -> bool:
-        g = self.grabber(log)
-        with self._launch_lock:
-            if self.logged_in:
-                return True
+        if self.logged_in:
+            return True
         if log:
             log("[브라우저] 로그인 확인 중(이미 로그인돼 있으면 자동 통과)…")
-        ok = g.ensure_login(timeout_s=timeout_s)
+
+        def job():
+            g = self._ensure_grabber()
+            return g.ensure_login(timeout_s=timeout_s)
+
+        ok = self._submit(job)
         if ok:
-            with self._launch_lock:
-                self.logged_in = True
-                self._login_lost_notified = False
+            self.logged_in = True
+            self._login_lost_notified = False
             if log:
                 log("[브라우저] 로그인 확인 완료 — 세션 유지됨")
         return ok
 
+    def grab(self, recipe, day, hhmm, movie, persons, preferred, only, prefer):
+        """새 탭에서 좌석 선점을 끝까지 진행. (ok, seat, msg) 반환."""
+        def job():
+            g = self._ensure_grabber()
+            page = g.new_page()
+            return g.replay(recipe, day=day, hhmm=hhmm, movie=movie, persons=persons,
+                            preferred=preferred, only_preferred=only, prefer=prefer, page=page)
+        return self._submit(job)
+
     def recheck_login(self, log=None, notifier=None) -> bool:
-        """감시 중 주기적 로그인 상태 점검. 세션이 풀렸으면 1회 알림. True=로그인 유지."""
-        if self.held.is_set() or self._grabber is None or not self.logged_in:
+        if self.held.is_set() or not self.logged_in:
             return True
-        if not self.book_lock.acquire(blocking=False):
-            return True  # 좌석잡기 중 → 이번엔 건너뜀
-        try:
-            if self.held.is_set():
+
+        def job():
+            if self._grabber is None:
                 return True
-            ok = self._grabber.quick_login_check()
+            return self._grabber.quick_login_check()
+
+        try:
+            ok = self._submit(job)
         except Exception:  # noqa: BLE001
             return True
-        finally:
-            self.book_lock.release()
         if not ok:
             self.logged_in = False
             if not self._login_lost_notified:
@@ -94,16 +123,33 @@ class WatchHub:
             return False
         return True
 
+    def can_hold(self) -> bool:
+        with self._holds_lock:
+            return self.holds < self.max_holds
+
+    def add_hold(self) -> int:
+        with self._holds_lock:
+            self.holds += 1
+            return self.holds
+
     def close(self) -> None:
-        with self._launch_lock:
+        self._closed = True
+
+        def job():
             if self._grabber:
                 try:
                     self._grabber.close()
                 except Exception:  # noqa: BLE001
                     pass
             self._grabber = None
-            self.logged_in = False
-            self._login_lost_notified = False
+
+        try:
+            self._submit(job)
+        except Exception:  # noqa: BLE001
+            pass
+        self._q.put(None)
+        self.logged_in = False
+        self._login_lost_notified = False
         with self._holds_lock:
             self.holds = 0
         self.held.clear()

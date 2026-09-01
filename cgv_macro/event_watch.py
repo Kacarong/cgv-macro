@@ -59,7 +59,6 @@ class EventWatcher:
             f"× 상영중 전체영화 (주기 {interval}s, 좌석 {need}석)")
 
         if self.hub is not None:
-            self.grabber = self.hub.grabber(log)
             if not self.hub.ensure_login(log):
                 log("[무대인사] 로그인 실패 — 중지")
                 return
@@ -117,15 +116,20 @@ class EventWatcher:
                                 log(f"[무대인사] 동시 선점 상한({self.hub.max_holds}) 도달 — 알림만")
                             else:
                                 log(f"[무대인사] 좌석 잡기 시도: {mov_nm} {s.time}")
-                                lock = self.hub.book_lock if self.hub is not None else _NULL_LOCK
-                                page = self.hub.new_grab_page() if self.hub is not None else None
-                                with lock:
-                                    if self._held():
-                                        return False
-                                    ok, seat, msg = self.grabber.replay(
-                                        self.recipe, day=disp, hhmm=s.time, movie=mov_nm,
-                                        persons=persons, preferred=preferred,
-                                        only_preferred=only, prefer=prefer, page=page)
+                                if self._held():
+                                    return False
+                                try:
+                                    if self.hub is not None:
+                                        ok, seat, msg = self.hub.grab(
+                                            self.recipe, disp, s.time, mov_nm,
+                                            persons, preferred, only, prefer)
+                                    else:
+                                        ok, seat, msg = self.grabber.replay(
+                                            self.recipe, day=disp, hhmm=s.time, movie=mov_nm,
+                                            persons=persons, preferred=preferred,
+                                            only_preferred=only, prefer=prefer)
+                                except Exception as e:  # noqa: BLE001
+                                    ok, seat, msg = False, "", f"좌석잡기 오류: {e}"
                                 if ok:
                                     n = self.hub.add_hold() if self.hub is not None else 1
                                     log(f"[무대인사] ✅ 좌석 선점: {mov_nm} {seat} — {msg} "

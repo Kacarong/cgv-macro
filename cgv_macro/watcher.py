@@ -152,7 +152,6 @@ class MultiWatcher:
                 f"{sp['time'] or '(전체)'} {'/좌석 '+','.join(sp['preferred']) if sp['preferred'] else ''}")
 
         if self.hub is not None:
-            self.grabber = self.hub.grabber(log)
             if not self.hub.ensure_login(log):
                 log("[감시] 로그인 실패 — 중지"); return
         else:
@@ -187,16 +186,21 @@ class MultiWatcher:
                     continue
                 log(f"[감시] ▶ {sp['mov_nm']} {s.time} {s.screen} 잔여{s.remaining} → 좌석 잡기")
                 self.grabbed.add(s.showtime_key())   # 같은 회차 중복 선점 방지
-                # DOM 조작은 공유 락으로 하나씩(결과 탭은 각자 유지 → 동시 선점).
-                lock = self.hub.book_lock if self.hub is not None else _NULL_LOCK
-                page = self.hub.new_grab_page() if self.hub is not None else None
-                with lock:
-                    if self._held():
-                        break
-                    ok, seat, msg = self.grabber.replay(
-                        self.recipe, day=sp["t"].get("date", ""), hhmm=s.time, movie=sp["mov_nm"],
-                        persons=sp["persons"], preferred=sp["preferred"],
-                        only_preferred=sp["only"], prefer=sp["prefer"], page=page)
+                if self._held():
+                    break
+                # 브라우저 작업은 허브(전용 스레드)로 위임 → 새 탭에서 선점(동시 선점 가능)
+                try:
+                    if self.hub is not None:
+                        ok, seat, msg = self.hub.grab(
+                            self.recipe, sp["t"].get("date", ""), s.time, sp["mov_nm"],
+                            sp["persons"], sp["preferred"], sp["only"], sp["prefer"])
+                    else:
+                        ok, seat, msg = self.grabber.replay(
+                            self.recipe, day=sp["t"].get("date", ""), hhmm=s.time, movie=sp["mov_nm"],
+                            persons=sp["persons"], preferred=sp["preferred"],
+                            only_preferred=sp["only"], prefer=sp["prefer"])
+                except Exception as e:  # noqa: BLE001
+                    ok, seat, msg = False, "", f"좌석잡기 오류: {e}"
                 if ok:
                     n = self.hub.add_hold() if self.hub is not None else 1
                     log(f"[감시] ✅ 좌석 선점: {sp['mov_nm']} {seat} — {msg} (선점 {n}개, 감시 계속)")
