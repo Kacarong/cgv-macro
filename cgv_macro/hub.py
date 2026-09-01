@@ -23,6 +23,7 @@ class WatchHub:
         self.book_lock = threading.Lock()   # 동시에 하나만 좌석잡기
         self.held = threading.Event()       # 좌석 선점 완료 → 모든 감시 중단 신호
         self.logged_in = False
+        self._login_lost_notified = False
 
     def grabber(self, log=None) -> Grabber:
         with self._launch_lock:
@@ -43,9 +44,39 @@ class WatchHub:
         if ok:
             with self._launch_lock:
                 self.logged_in = True
+                self._login_lost_notified = False
             if log:
                 log("[브라우저] 로그인 확인 완료 — 세션 유지됨")
         return ok
+
+    def recheck_login(self, log=None, notifier=None) -> bool:
+        """감시 중 주기적 로그인 상태 점검. 세션이 풀렸으면 1회 알림. True=로그인 유지."""
+        if self.held.is_set() or self._grabber is None or not self.logged_in:
+            return True
+        if not self.book_lock.acquire(blocking=False):
+            return True  # 좌석잡기 중 → 이번엔 건너뜀
+        try:
+            if self.held.is_set():
+                return True
+            ok = self._grabber.quick_login_check()
+        except Exception:  # noqa: BLE001
+            return True
+        finally:
+            self.book_lock.release()
+        if not ok:
+            self.logged_in = False
+            if not self._login_lost_notified:
+                self._login_lost_notified = True
+                if log:
+                    log("[로그인] ⚠️ CGV 세션이 만료된 것 같아요. '① 로그인 준비'로 다시 로그인하세요.")
+                if notifier:
+                    try:
+                        notifier.notify_info("🔑 CGV 로그인 필요",
+                                             "세션이 만료됐어요. 프로그램에서 '① 로그인 준비'를 눌러 다시 로그인하세요.")
+                    except Exception:  # noqa: BLE001
+                        pass
+            return False
+        return True
 
     def close(self) -> None:
         with self._launch_lock:
@@ -56,4 +87,5 @@ class WatchHub:
                     pass
             self._grabber = None
             self.logged_in = False
+            self._login_lost_notified = False
         self.held.clear()

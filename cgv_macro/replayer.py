@@ -158,6 +158,21 @@ class Grabber:
             p.wait_for_timeout(1000)
         return "movieBook" in p.url and "login" not in p.url
 
+    def quick_login_check(self, timeout_ms: int = 7000) -> bool:
+        """로그인 화면으로 잠깐 이동해 redirect 여부로 로그인 상태 판단. True=로그인 유지.
+        로그인돼 있으면 CGV가 즉시 극장별예매로 리다이렉트하고, 아니면 로그인 화면에 머문다."""
+        p = self.page
+        try:
+            p.goto(LOGIN_URL, wait_until="domcontentloaded")
+        except Exception:  # noqa: BLE001
+            return True  # 판단 불가 → 오탐 방지 위해 로그인된 것으로 간주
+        deadline = time.time() + timeout_ms / 1000.0
+        while time.time() < deadline:
+            if "movieBook" in p.url and "login" not in p.url:
+                return True
+            p.wait_for_timeout(400)
+        return False
+
     def replay(self, recipe: dict, day: str, hhmm: str, movie: str = "",
                persons: dict | None = None, preferred: list[str] | None = None,
                only_preferred: bool = False, prefer: str = "center") -> tuple[bool, str, str]:

@@ -58,6 +58,7 @@ class App(ctk.CTk):
         self.hub = None
         self.workers: list = []
         self._active = 0
+        self._notifier = None
 
         self.cancel_list: list[dict] = []      # 취소표 감지 대상
         self.open_list: list[dict] = []        # 상영오픈 감지 대상
@@ -72,6 +73,7 @@ class App(ctk.CTk):
         self._load()
         self.logger = setup_logger(paths.logs_dir(), "INFO")
         self.after(200, self._drain)
+        self.after(300000, self._login_watchdog)   # 5분마다 로그인 상태 점검
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         threading.Thread(target=self._load_lists, daemon=True).start()
 
@@ -469,11 +471,31 @@ class App(ctk.CTk):
         def worker():
             try:
                 ok = self.hub.ensure_login(self._put, timeout_s=600)
-                self._put("[로그인] 완료 — 이제 '감시 시작'하면 자동 로그인됩니다."
-                          if ok else "[로그인] 실패/시간초과 — 다시 시도하세요.")
+                if ok:
+                    self._put("[로그인] 완료 — 세션 유지됨. '감시 시작'하면 재로그인 없이 진행됩니다.")
+                    self.after(0, self._refresh_status)
+                else:
+                    self._put("[로그인] 실패/시간초과 — 다시 시도하세요.")
             except Exception as e:  # noqa: BLE001
                 self._put(f"[로그인] 오류: {e}")
         threading.Thread(target=worker, daemon=True).start()
+
+    def _refresh_status(self):
+        if self._active > 0:
+            self.stat.configure(text="● 감시 중", text_color=GREEN)
+        elif self.hub and self.hub.logged_in:
+            self.stat.configure(text="● 대기(로그인 유지)", text_color=GREEN)
+        else:
+            self.stat.configure(text="● 대기", text_color=SUB)
+
+    def _login_watchdog(self):
+        if self._active > 0 and self.hub and self.hub.logged_in and not self.hub.held.is_set():
+            def w():
+                ok = self.hub.recheck_login(self._put, self._notifier)
+                if not ok:
+                    self.after(0, lambda: self.stat.configure(text="● 로그인 필요", text_color=RED))
+            threading.Thread(target=w, daemon=True).start()
+        self.after(300000, self._login_watchdog)
 
     # ---------- 감시 ----------
     def _watch_start(self):
@@ -487,6 +509,7 @@ class App(ctk.CTk):
         if webhook:
             from cgv_macro.notifier import DiscordNotifier
             notifier = DiscordNotifier(webhook, self.e_ment.get().strip())
+        self._notifier = notifier
 
         from cgv_macro.hub import WatchHub
         if self.hub is None:
