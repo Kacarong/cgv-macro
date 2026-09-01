@@ -255,7 +255,8 @@ class App(ctk.CTk):
                 labels = ["전체(자동)"]
                 self.time_map = {}
                 for s in shows:
-                    lb = f"{s.time}  {s.screen} 잔여{s.remaining}"
+                    ev = f"  🎤{s.event}" if getattr(s, "event", "") else ""
+                    lb = f"{s.time}  {s.screen} 잔여{s.remaining}{ev}"
                     labels.append(lb); self.time_map[lb] = s.time
                 self.after(0, lambda: (self.dd_time.configure(values=labels), self.dd_time.set(labels[0])))
                 self._put(f"회차 {len(shows)}건 불러옴{(' ('+screen+')') if screen else ''}.")

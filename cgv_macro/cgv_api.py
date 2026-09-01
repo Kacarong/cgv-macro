@@ -58,6 +58,7 @@ class Showtime:
     total: int = -1           # 총좌석(cpSeatCnt)
     soldout: bool = False
     controlled: bool = False  # 판매통제(cntlYn=Y)
+    event: str = ""           # 이벤트/특전(무대인사·GV·씨네드쉐프행사 등)
     schedule_id: str = ""     # scnSseq
     scns_no: str = ""         # scnsNo
     raw: dict[str, Any] = field(default_factory=dict)
@@ -152,6 +153,11 @@ def fetch_showtimes(mov_no: str, site_no: str, date_yyyymmdd: str) -> list[Showt
     out: list[Showtime] = []
     for it in data:
         rem = _to_int(it.get("frSeatCnt"))
+        event = ""
+        for k in ("videoAddexpCdNm", "prmddNm", "movEtcAttrCd"):
+            v = it.get(k)
+            if v not in (None, "", "N"):
+                event = str(v); break
         st = Showtime(
             time=_norm_time(it.get("scnsrtTm")),
             screen=str(it.get("scnsNm", "")),
@@ -160,6 +166,7 @@ def fetch_showtimes(mov_no: str, site_no: str, date_yyyymmdd: str) -> list[Showt
             total=_to_int(it.get("cpSeatCnt")),
             soldout=(rem == 0),
             controlled=str(it.get("cntlYn", "N")).upper() == "Y",
+            event=event,
             schedule_id=str(it.get("scnSseq", "")),
             scns_no=str(it.get("scnsNo", "")),
             raw=it,
