@@ -401,9 +401,8 @@ class App(ctk.CTk):
         for tt in targets:
             if not tt.get("date"):
                 self._put("모든 대상에 날짜가 필요합니다."); return
-            if tt.get("mode") == "취소표 감지" and not tt.get("time"):
-                self._put(f"취소표 감지 대상은 회차(시간) 선택 필요: {tt.get('movie')}"); return
         self._save()
+        self._put(f"감시 준비 — 대상 {len(targets)}개. 크롬 로그인 창을 확인하세요…")
         recipe = json.load(open(RECIPE, encoding="utf-8"))
         notifier = None
         if t["webhook"]:
