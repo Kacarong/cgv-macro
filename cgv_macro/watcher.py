@@ -25,11 +25,12 @@ class Watcher:
     """대상 1개를 '독립된 크롬 창 1개'에서 감시·선점. 성공하면 그 창을 결제창으로 유지."""
 
     def __init__(self, recipe: dict, target: dict, notifier=None,
-                 profile_dir: str | None = None, tag: str = "감시") -> None:
+                 storage_state: str | None = None, win_pos=None, tag: str = "감시") -> None:
         self.recipe = recipe
         self.t = target
         self.notifier = notifier
-        self.profile_dir = profile_dir
+        self.storage_state = storage_state   # 저장된 로그인 세션(공유 로그인)
+        self.win_pos = win_pos
         self.tag = tag
         self.grabber: Grabber | None = None
         self.held_payment = False   # 좌석 선점(결제창 도달) 여부
@@ -58,15 +59,22 @@ class Watcher:
             f"{'/ 원하는좌석 '+','.join(preferred) if preferred else ''}")
 
         try:
-            self.grabber = Grabber(headless=False, profile_dir=self.profile_dir).__enter__()
+            self.grabber = Grabber(headless=False, storage_state=self.storage_state,
+                                   win_pos=self.win_pos).__enter__()
         except Exception as e:  # noqa: BLE001
             log(f"[{tag}] 크롬 실행 실패: {e}")
             return
+        # 저장된 세션이면 이미 로그인 상태 → 예매 페이지로 이동해 확인/대기(창이 보이게)
+        try:
+            self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema", wait_until="domcontentloaded")
+        except Exception:  # noqa: BLE001
+            pass
         if not self.grabber.ensure_login(timeout_s=600):
             log(f"[{tag}] 로그인 안 됨 — 이 창에서 로그인하거나 '로그인 준비'를 다시 하세요")
             return
         log(f"[{tag}] 로그인 확인 → 감시 시작")
 
+        idle_ticks = 0
         while not stop_event.is_set():
             try:
                 shows = cgv_api.fetch_showtimes(mov_no, site_no, _scnymd(t.get("date", "")))
@@ -107,7 +115,15 @@ class Watcher:
                 else:
                     log(f"[{tag}] 미완료: {msg}")
             else:
-                log(f"[{tag}] 대기중 — 예매가능 회차 없음")
+                # 예매가능 회차 없음 — 조용히 대기(로그 도배 방지). 가끔 세션 유지용 새로고침.
+                idle_ticks += 1
+                if idle_ticks % 12 == 0:
+                    try:
+                        self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema",
+                                               wait_until="domcontentloaded")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    log(f"[{tag}] 대기중(세션 유지)")
             self._sleep(interval, stop_event)
         log(f"[{tag}] 종료")
 

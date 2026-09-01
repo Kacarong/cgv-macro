@@ -120,27 +120,51 @@ def clone_profile(idx: int) -> str:
 
 
 class Grabber:
-    def __init__(self, headless: bool = False, profile_dir: str | None = None) -> None:
+    def __init__(self, headless: bool = False, profile_dir: str | None = None,
+                 storage_state: str | None = None, win_pos: tuple[int, int] | None = None) -> None:
         self.headless = headless
         self.profile = profile_dir or PROFILE
+        self.storage_state = storage_state   # 지정 시: 저장된 로그인 세션으로 독립 창(병렬용)
+        self.win_pos = win_pos
         self._pw = None
+        self._browser = None
         self._ctx = None
         self.page = None
 
     def __enter__(self) -> "Grabber":
         self._pw = sync_playwright().start()
-        kw = dict(user_data_dir=self.profile, headless=self.headless, locale="ko-KR",
-                  viewport={"width": 1440, "height": 960}, args=["--start-maximized"])
-        try:
-            self._ctx = self._pw.chromium.launch_persistent_context(channel="chrome", **kw)
-        except Exception:  # noqa: BLE001
-            self._ctx = self._pw.chromium.launch_persistent_context(**kw)
-        self.page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
+        if self.storage_state is not None:
+            # 독립 브라우저 + 저장된 세션 주입 → 창마다 별도 프로세스로 '진짜 병렬' + 로그인 공유
+            pos = self.win_pos or (40, 40)
+            args = [f"--window-position={pos[0]},{pos[1]}", "--window-size=1180,880"]
+            try:
+                self._browser = self._pw.chromium.launch(channel="chrome", headless=self.headless, args=args)
+            except Exception:  # noqa: BLE001
+                self._browser = self._pw.chromium.launch(headless=self.headless, args=args)
+            ss = self.storage_state if os.path.exists(self.storage_state) else None
+            self._ctx = self._browser.new_context(storage_state=ss, locale="ko-KR",
+                                                  viewport={"width": 1160, "height": 820})
+            self.page = self._ctx.new_page()
+        else:
+            kw = dict(user_data_dir=self.profile, headless=self.headless, locale="ko-KR",
+                      viewport={"width": 1440, "height": 960}, args=["--start-maximized"])
+            try:
+                self._ctx = self._pw.chromium.launch_persistent_context(channel="chrome", **kw)
+            except Exception:  # noqa: BLE001
+                self._ctx = self._pw.chromium.launch_persistent_context(**kw)
+            self.page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
         self._ctx.set_default_timeout(9000)
         return self
 
     def __exit__(self, *exc) -> None:
         pass
+
+    def export_state(self, path: str) -> None:
+        """현재 로그인 세션(쿠키/스토리지)을 파일로 저장 → 다른 창에 주입해 로그인 공유."""
+        try:
+            self._ctx.storage_state(path=path)
+        except Exception:  # noqa: BLE001
+            pass
 
     def new_page(self):
         """동시 선점용 새 탭. 같은 컨텍스트라 로그인 세션을 공유한다."""
@@ -170,9 +194,15 @@ class Grabber:
         try:
             if self._ctx:
                 self._ctx.close()
-        finally:
-            if self._pw:
-                self._pw.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._browser:
+                self._browser.close()
+        except Exception:  # noqa: BLE001
+            pass
+        if self._pw:
+            self._pw.stop()
 
     def _shot(self, page, name: str) -> None:
         try:

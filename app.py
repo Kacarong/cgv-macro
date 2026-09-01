@@ -2,9 +2,9 @@
 CGV 좌석 감시 · 자동잡기 — 다크 UI (CustomTkinter).
 
 탭: 취소표 감지 / 상영 오픈 감지 / 무대인사 감지 / 설정.
-- 감지는 전부 CGV 조회 API 폴링(로그인·창 불필요). 실제 좌석잡기 때만 크롬 1개를 연다.
-- 모든 감시는 크롬 1개(WatchHub)를 공유하고, 좌석잡기는 락으로 직렬화 → 창 충돌 없음.
-- '로그인 준비'로 1회 로그인하면 세션이 프로필에 저장돼, 자리에 없어도 자동으로 잡는다.
+- '로그인 준비'로 마스터 1회 로그인 → 세션(쿠키)을 파일로 저장(storage_state).
+- '감시 시작' 시 대상마다 '독립 크롬 창'을 저장된 세션으로 열어(로그인 공유) 진짜 병렬 감시·선점.
+- 각 창은 자기 대상만 감시하다 자리가 나면 그 창에서 결제창까지 선점.
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ SUB = "#9A9AA2"
 
 CONFIG = os.path.join(paths.data_dir(), "app_config.json")
 RECIPE = os.path.join(paths.data_dir(), "recipe.json")
+STATE_JSON = os.path.join(paths.data_dir(), "cgv_state.json")   # 로그인 세션(창 공유용)
 SCREENS = ["전체", "2D", "IMAX", "4DX", "SCREENX", "DOLBY ATMOS", "ULTRA 4DX"]
 WD = ["월", "화", "수", "목", "금", "토", "일"]
 
@@ -55,11 +56,11 @@ class App(ctk.CTk):
         self.rec_start = threading.Event()
         self.rec_stop = threading.Event()
         self.watch_stop = threading.Event()
-        self.hub = None
         self.workers: list = []
         self._active = 0
         self._notifier = None
-        self._wd_tick = 0
+        self.master_ready = False
+        self._logging_in = False
 
         self.cancel_list: list[dict] = []      # 취소표 감지 대상
         self.open_list: list[dict] = []        # 상영오픈 감지 대상
@@ -74,7 +75,6 @@ class App(ctk.CTk):
         self._load()
         self.logger = setup_logger(paths.logs_dir(), "INFO")
         self.after(200, self._drain)
-        self.after(300000, self._login_watchdog)   # 5분마다 로그인 상태 점검
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         threading.Thread(target=self._load_lists, daemon=True).start()
 
@@ -467,55 +467,44 @@ class App(ctk.CTk):
         txt = ("· " + ",  ".join(self.event_theaters)) if self.event_theaters else "(선택된 극장 없음)"
         self.ev_lbl.configure(text=txt)
 
-    # ---------- 로그인 준비 ----------
+    # ---------- 로그인 준비 (마스터 1회 로그인 → 세션 저장) ----------
     def _prelogin(self):
-        from cgv_macro.hub import WatchHub
-        if self.hub is None:
-            self.hub = WatchHub()
-        self._put("[로그인] 크롬을 띄웁니다. 로그인 후 창은 그대로 두세요. 앱이 2분마다 세션을 살려둡니다(keep-alive).")
+        if self._logging_in:
+            return
+        self._logging_in = True
+        self._put("[로그인] 크롬을 띄웁니다. 로그인(캡챠 포함)만 마치면 세션을 저장하고 창을 닫습니다.")
 
         def worker():
+            from cgv_macro.replayer import Grabber
             try:
-                ok = self.hub.ensure_login(self._put, timeout_s=600)
+                g = Grabber(headless=False).__enter__()
+                ok = g.ensure_login(timeout_s=600)
                 if ok:
-                    self._put("[로그인] 완료 — 세션 유지됨. '감시 시작'하면 재로그인 없이 진행됩니다.")
-                    self.after(0, self._refresh_status)
+                    g.export_state(STATE_JSON)   # 세션(쿠키)을 저장 → 각 창에 주입
+                try:
+                    g.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                if ok:
+                    self.master_ready = True
+                    self._put("[로그인] 완료·세션 저장됨. '② 감시 시작'하면 대상마다 창이 뜨고 로그인이 공유됩니다.")
+                    self.after(0, lambda: self.stat.configure(text="● 로그인됨(대기)", text_color=GREEN))
                 else:
                     self._put("[로그인] 실패/시간초과 — 다시 시도하세요.")
             except Exception as e:  # noqa: BLE001
                 self._put(f"[로그인] 오류: {e}")
+            finally:
+                self._logging_in = False
         threading.Thread(target=worker, daemon=True).start()
 
-    def _refresh_status(self):
-        if self._active > 0:
-            self.stat.configure(text="● 감시 중", text_color=GREEN)
-        elif self.hub and self.hub.logged_in:
-            self.stat.configure(text="● 대기(로그인 유지)", text_color=GREEN)
-        else:
-            self.stat.configure(text="● 대기", text_color=SUB)
-
-    def _login_watchdog(self):
-        # 2분마다 세션 유지(예매 페이지 새로고침), 6분마다 로그인 상태 점검(+풀리면 알림).
-        if self.hub and self.hub.logged_in and not self.hub.held.is_set():
-            self._wd_tick += 1
-            tick = self._wd_tick
-
-            def w():
-                if tick % 3 == 0:
-                    ok = self.hub.recheck_login(self._put, self._notifier)
-                    if not ok:
-                        self.after(0, lambda: self.stat.configure(text="● 로그인 필요", text_color=RED))
-                else:
-                    self.hub.keepalive()
-            threading.Thread(target=w, daemon=True).start()
-        self.after(120000, self._login_watchdog)   # 2분
-
-    # ---------- 감시 ----------
+    # ---------- 감시 (대상마다 독립 창 · 로그인 세션 공유 · 진짜 병렬) ----------
     def _watch_start(self):
         if self._active > 0:
             return
         if not os.path.exists(RECIPE):
             self._put("먼저 '설정' 탭에서 예매 흐름을 1회 녹화하세요."); return
+        if not (self.master_ready or os.path.exists(STATE_JSON)):
+            self._put("먼저 '① 로그인 준비'로 1회 로그인하세요(세션이 각 창에 공유됩니다)."); return
         recipe = json.load(open(RECIPE, encoding="utf-8"))
         webhook = self.e_hook.get().strip()
         notifier = None
@@ -524,23 +513,29 @@ class App(ctk.CTk):
             notifier = DiscordNotifier(webhook, self.e_ment.get().strip())
         self._notifier = notifier
 
-        from cgv_macro.hub import WatchHub
-        if self.hub is None:
-            self.hub = WatchHub()
-        self.hub.held.clear()
+        from cgv_macro.watcher import Watcher
+        from cgv_macro.event_watch import EventWatcher
+
+        self._close_idle_workers()   # 이전에 남은 유휴 창 정리
+
+        def pos(i):
+            return (30 + (i % 4) * 300 + (i // 4) * 40, 30 + (i % 3) * 200)
 
         workers = []
-        poll = list(self.cancel_list) + list(self.open_list)
-        if poll:
-            from cgv_macro.watcher import MultiWatcher
-            workers.append(MultiWatcher(recipe, poll, notifier, hub=self.hub))
+        i = 0
+        for t in list(self.cancel_list):
+            workers.append(Watcher(recipe, t, notifier, storage_state=STATE_JSON, win_pos=pos(i),
+                                   tag=f"취소#{i+1} {t.get('movie','')[:6]}")); i += 1
+        for t in list(self.open_list):
+            workers.append(Watcher(recipe, t, notifier, storage_state=STATE_JSON, win_pos=pos(i),
+                                   tag=f"오픈#{i+1} {t.get('movie','')[:6]}")); i += 1
         if self.event_theaters:
             ths = [(self.theaters[nm][0], nm) for nm in self.event_theaters if nm in self.theaters]
             if ths:
-                from cgv_macro.event_watch import EventWatcher
                 base = self._read_ps(self.ns_event)
-                workers.append(EventWatcher(recipe, ths, base, notifier,
-                                            days=int(self.dd_days.get()), hub=self.hub))
+                workers.append(EventWatcher(recipe, ths, base, notifier, days=int(self.dd_days.get()),
+                                            storage_state=STATE_JSON, win_pos=pos(i),
+                                            tag=f"무대인사#{i+1}")); i += 1
         if not workers:
             self._put("감시할 대상이 없습니다. 각 탭에서 대상/극장을 추가하세요."); return
 
@@ -548,14 +543,13 @@ class App(ctk.CTk):
         self.watch_stop.clear()
         self.workers = workers
         self._active = len(workers)
-        self._put(f"감시 시작 — 폴링대상 {len(poll)}개 / 무대인사극장 {len(self.event_theaters)}곳. "
-                  f"크롬 로그인 상태 확인 중…")
+        self._put(f"감시 시작 — 창 {len(workers)}개를 띄워 '동시에' 감시합니다(대상마다 1개, 로그인 공유).")
 
         for w in workers:
             threading.Thread(target=self._run_worker, args=(w,), daemon=True).start()
         self.b_start.configure(state="disabled")
         self.b_stop.configure(state="normal", fg_color=RED, hover_color=RED_DK)
-        self.stat.configure(text="● 감시 중", text_color=GREEN)
+        self.stat.configure(text=f"● 감시 중 (창 {len(workers)})", text_color=GREEN)
 
     def _run_worker(self, w):
         try:
@@ -570,37 +564,37 @@ class App(ctk.CTk):
         if self._active <= 0:
             self._watch_ended()
 
+    def _close_idle_workers(self):
+        keep = []
+        for w in self.workers:
+            if getattr(w, "held_payment", False):
+                keep.append(w)   # 결제 대기 창은 유지
+            else:
+                try:
+                    w.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        self.workers = keep
+
     def _watch_stop(self):
         self.watch_stop.set()
-        if self.hub:
-            self.hub.held.set()  # 진행 중 좌석잡기 이후 즉시 정지 유도
         self.stat.configure(text="● 중지 중…", text_color="#E0A030")
 
     def _watch_ended(self):
-        # 감시만 멈추고 크롬(로그인 세션)은 그대로 열어둔다 → 재시작 시 재로그인 불필요.
-        # 브라우저는 프로그램 종료(_on_close) 때만 닫는다.
-        for w in self.workers:
-            try:
-                w.close()   # hub 소유 브라우저는 닫지 않음(watcher.close 가 hub면 skip)
-            except Exception:  # noqa: BLE001
-                pass
-        self.workers = []
+        held = sum(1 for w in self.workers if getattr(w, "held_payment", False))
+        self._close_idle_workers()
         self.b_start.configure(state="normal")
         self.b_stop.configure(state="disabled", fg_color="#33333A")
-        if self.hub and self.hub.logged_in:
-            self.stat.configure(text="● 대기(로그인 유지)", text_color=GREEN)
-            held = getattr(self.hub, "holds", 0)
-            extra = f" 선점한 결제창 {held}개는 각 탭에서 결제하세요." if held else ""
-            self._put(f"감시 중지 — 크롬은 로그인된 채 열려 있습니다.{extra} 다시 '감시 시작'하면 재로그인 없이 진행돼요.")
-        else:
-            self.stat.configure(text="● 대기", text_color=SUB)
+        self.stat.configure(text="● 로그인됨(대기)" if self.master_ready else "● 대기",
+                            text_color=GREEN if self.master_ready else SUB)
+        extra = f" 선점한 결제창 {held}개는 그 창에서 결제하세요." if held else ""
+        self._put(f"감시 중지.{extra}")
 
     def _on_close(self):
         self.watch_stop.set(); self.rec_stop.set()
-        if self.hub:
-            self.hub.held.set()
+        for w in self.workers:
             try:
-                self.hub.close()   # 프로그램 종료 시에만 크롬 닫기
+                w.close()
             except Exception:  # noqa: BLE001
                 pass
         self.destroy()
