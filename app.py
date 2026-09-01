@@ -90,13 +90,35 @@ class App(ctk.CTk):
         ctk.CTkLabel(head, text="취소표·오픈 감지 → 좌석 자동 잡기", text_color=SUB,
                      font=ctk.CTkFont(size=12)).pack(side="left", padx=10)
 
-        # 탭: 감시 / 설정
+        # === 하단 고정: 액션바(감시 시작/중지) + 로그 — 항상 보이게 ===
+        actionbar = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0)
+        actionbar.pack(side="bottom", fill="x")
+        ctk.CTkButton(actionbar, text="설정 저장", fg_color="#33333A", hover_color="#44444C",
+                      width=90, command=self._save).pack(side="left", padx=(14, 6), pady=10)
+        self.b_start = ctk.CTkButton(actionbar, text="감시 시작", fg_color=RED, hover_color=RED_DK,
+                                     font=ctk.CTkFont(size=14, weight="bold"), width=150, height=38,
+                                     command=self._watch_start)
+        self.b_start.pack(side="left", padx=6, pady=10)
+        self.b_stop = ctk.CTkButton(actionbar, text="중지", fg_color="#33333A", hover_color="#44444C",
+                                    width=80, height=38, state="disabled", command=self._watch_stop)
+        self.b_stop.pack(side="left", pady=10)
+        self.stat = ctk.CTkLabel(actionbar, text="● 대기", text_color=SUB)
+        self.stat.pack(side="right", padx=16)
+
+        self.logbox = ctk.CTkTextbox(self, fg_color="#050506", text_color="#D6D6DA",
+                                     font=ctk.CTkFont(size=12), height=130, corner_radius=0)
+        self.logbox.pack(side="bottom", fill="x")
+        self.logbox.configure(state="disabled")
+
+        # === 탭 (가운데, 스크롤) ===
         self.tabs = ctk.CTkTabview(self, fg_color=BG,
                                    segmented_button_selected_color=RED,
                                    segmented_button_selected_hover_color=RED_DK)
         self.tabs.pack(fill="both", expand=True, padx=10, pady=(2, 4))
-        main = self.tabs.add("감시")
+        main_tab = self.tabs.add("감시")
         sett = self.tabs.add("설정")
+        main = ctk.CTkScrollableFrame(main_tab, fg_color=BG)
+        main.pack(fill="both", expand=True)
 
         # 모드
         mc = self._card(main)
@@ -196,27 +218,8 @@ class App(ctk.CTk):
                       command=self._add_target).pack(side="left")
         ctk.CTkButton(addrow, text="목록 비우기", fg_color="#33333A", hover_color="#44444C",
                       command=self._clear_list).pack(side="left", padx=8)
-        self.list_frame = ctk.CTkScrollableFrame(lc, fg_color="#141417", height=120)
+        self.list_frame = ctk.CTkScrollableFrame(lc, fg_color="#141417", height=140)
         self.list_frame.pack(fill="x", padx=16, pady=(2, 12))
-
-        # === 감시 탭: 감시 시작/중지 ===
-        ac = self._card(main, "감시")
-        r2 = ctk.CTkFrame(ac, fg_color=PANEL); r2.pack(fill="x", padx=16, pady=(4, 12))
-        ctk.CTkButton(r2, text="설정 저장", fg_color="#33333A", hover_color="#44444C", width=90,
-                      command=self._save).pack(side="left")
-        self.b_start = ctk.CTkButton(r2, text="감시 시작", fg_color=RED, hover_color=RED_DK,
-                                     font=ctk.CTkFont(size=13, weight="bold"), width=130, command=self._watch_start)
-        self.b_start.pack(side="left", padx=8)
-        self.b_stop = ctk.CTkButton(r2, text="중지", fg_color="#33333A", hover_color="#44444C", width=80,
-                                    state="disabled", command=self._watch_stop)
-        self.b_stop.pack(side="left")
-        self.stat = ctk.CTkLabel(r2, text="● 대기", text_color=SUB); self.stat.pack(side="right")
-
-        # 로그
-        self.logbox = ctk.CTkTextbox(self, fg_color="#050506", text_color="#D6D6DA",
-                                     font=ctk.CTkFont(size=12), height=150, corner_radius=12)
-        self.logbox.pack(fill="both", expand=True, padx=16, pady=(2, 14))
-        self.logbox.configure(state="disabled")
 
     # ---------- 데이터 로드 ----------
     def _load_lists(self):
