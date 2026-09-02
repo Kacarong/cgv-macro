@@ -213,8 +213,14 @@ class DiscordNotifier:
         payload: dict[str, Any] = {"embeds": [embed]}
         return self._post(self._payload_with_mention(payload))
 
-    def notify_info(self, title: str, message: str) -> bool:
-        """일반 정보 알림(감시 시작 요약 등)."""
+    def notify_info(self, title: str, message: str, cooldown_seconds: int = 300) -> bool:
+        """일반 정보 알림. 같은 제목은 cooldown 내 1회만(여러 창 동시 알림 도배 방지)."""
+        now = time.time()
+        last = getattr(self, "_info_last", {})
+        if now - last.get(title, 0.0) < cooldown_seconds:
+            return False
+        last[title] = now
+        self._info_last = last
         embed = {"title": title, "description": message[:1900], "color": 0x95A5A6}
         payload: dict[str, Any] = {"embeds": [embed]}
         return self._post(self._payload_with_mention(payload))
