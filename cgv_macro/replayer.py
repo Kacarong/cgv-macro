@@ -534,22 +534,33 @@ class Grabber:
                     continue
             return False
 
+        def _clear_extend():
+            # '결제 가능 시간 연장' 팝업이 결제하기를 가리면 먼저 치운다(막힘 방지)
+            try:
+                self.click_extend_confirm(p)
+            except Exception:  # noqa: BLE001
+                pass
+
         # 1) 좌석요약 '결제하기' → 확인 모달 또는 결제 페이지 (끈질기게)
         for _attempt in range(6):
+            _clear_extend()
             if _confirm_open() or _pay_page():
                 break
             _click_pay(40)
             for _ in range(50):   # 최대 ~7.5s 대기
+                _clear_extend()
                 if _confirm_open() or _pay_page():
                     break
                 p.wait_for_timeout(150)
         # 2) '결제 전 확인' 모달의 결제하기 → 결제 페이지 (모달 사라질 때까지, 로딩 넉넉히)
         for _attempt in range(8):
+            _clear_extend()
             if _pay_page() or not _confirm_open():
                 break
             p.wait_for_timeout(400)
             _click_pay(20)
             for _ in range(70):   # 최대 ~10.5s 대기(결제수단 페이지 로딩 지연 대비)
+                _clear_extend()
                 if _pay_page() or _left_seat() or not _confirm_open():
                     break
                 p.wait_for_timeout(150)
