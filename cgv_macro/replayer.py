@@ -54,19 +54,24 @@ CLICK_TEXT_JS = r"""(a)=>{
 }"""
 
 # '결제하기' 버튼을 data-pay 로 표식(실제 클릭은 Playwright).
-# '결제 전 확인' 모달이 열려 있으면 그 모달 안의 결제하기를 우선 선택(배경 버튼 오클릭 방지).
+# '결제 전 확인' 모달이 열려 있으면 검색 범위를 그 모달로 한정 → 배경(좌석요약) 버튼 오클릭 방지.
 MARK_PAY_JS = r"""()=>{
   const norm=s=>(s||'').replace(/\s+/g,'');
   const vis=e=>{const r=e.getBoundingClientRect();return r.width>60&&r.height>10&&e.offsetParent!==null;};
-  let btns=[...document.querySelectorAll('button,a')].filter(e=>norm(e.textContent).includes('결제하기')&&vis(e));
-  if(!btns.length) btns=[...document.querySelectorAll('button,a,div')].filter(e=>norm(e.textContent).includes('결제하기')&&vis(e));
-  if(!btns.length) return null;
-  const inModal=btns.filter(b=>{let p=b;for(let i=0;i<12&&p;i++){if((p.textContent||'').includes('결제 전 확인'))return true;p=p.parentElement;}return false;});
-  const pool=inModal.length?inModal:btns;
-  pool.sort((a,b)=>b.getBoundingClientRect().top-a.getBoundingClientRect().top);
+  // '결제 전 확인' + '결제하기' 를 동시에 품은 '가장 안쪽' 컨테이너를 모달로 간주
+  let modal=null;
+  const holders=[...document.querySelectorAll('div,section,article,form')].filter(e=>{
+    const t=e.textContent||''; return t.includes('결제 전 확인')&&t.includes('결제하기');});
+  if(holders.length){ holders.sort((a,b)=>(a.textContent||'').length-(b.textContent||'').length); modal=holders[0]; }
+  const scope = modal || document;
+  // 버튼 타입에 상관없이(모달의 결제하기가 div/span 일 수 있음) 넓게 후보 수집
+  let cands=[...scope.querySelectorAll('button,a,div,span')].filter(e=>norm(e.textContent).includes('결제하기')&&vis(e));
+  if(!cands.length) return null;
+  // 화면상 '가장 아래' 것(하단 큰 결제 버튼) 선택
+  cands.sort((a,b)=>b.getBoundingClientRect().top-a.getBoundingClientRect().top);
   document.querySelectorAll('[data-pay]').forEach(e=>e.removeAttribute('data-pay'));
-  pool[0].setAttribute('data-pay','1');
-  return Math.round(pool[0].getBoundingClientRect().top);
+  cands[0].setAttribute('data-pay','1');
+  return Math.round(cands[0].getBoundingClientRect().top);
 }"""
 
 MARK_SHOW_JS = r"""(a)=>{const {hhmm,movie}=a;
