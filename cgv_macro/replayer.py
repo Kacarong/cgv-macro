@@ -455,7 +455,7 @@ class Grabber:
                             continue
                         done["pay"] = True
                         _lg("결제하기 클릭 진행…")
-                        reached = self._do_payment(p, deadline=deadline)
+                        reached = self._do_payment(p, deadline=deadline, log=_lg)
                         _lg("결제 페이지 도달 ✓" if reached else "결제 페이지 미도달(수동 결제하기 필요)")
                         if reached:
                             return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
@@ -487,7 +487,13 @@ class Grabber:
             logger.info("[replay] 인원 %s %d명 → %s", label, n, r)
             p.wait_for_timeout(300)
 
-    def _do_payment(self, page, deadline: float | None = None) -> bool:
+    def _do_payment(self, page, deadline: float | None = None, log=None) -> bool:
+        def _lg(m):
+            if log:
+                try:
+                    log(m)
+                except Exception:  # noqa: BLE001
+                    pass
         """좌석 선택 후 '결제하기'(좌석요약) → '결제 전 확인' 모달 결제하기 → 결제 페이지 도달.
         끈질기게 재시도하고, 결제 페이지 도달을 넓게 판정한다. True=결제 페이지 도달.
         (결제수단 페이지의 '최종 결제'는 모달이 있을 때만 누르므로 절대 누르지 않는다.)"""
@@ -543,6 +549,15 @@ class Grabber:
                 loc.scroll_into_view_if_needed(timeout=2000)
             except Exception:  # noqa: BLE001
                 pass
+            # 1) 실제 '마우스 좌표' 클릭 — React onClick 핸들러가 확실히 발동됨(가상클릭이 안 먹는 경우 대비)
+            try:
+                box = loc.bounding_box()
+                if box and box["height"] > 0:
+                    p.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+            # 2) 폴백: 일반/강제/JS 클릭
             for how in ("normal", "force", "js"):
                 try:
                     if how == "normal":
@@ -573,12 +588,15 @@ class Grabber:
             _clear_extend()
             if _confirm_open() or _pay_page():
                 break
+            _lg(f"좌석요약 결제하기 클릭 시도 #{_attempt+1}")
             _click_pay(40)
             for _ in range(50):   # 최대 ~7.5s 대기
                 _clear_extend()
                 if _confirm_open() or _pay_page():
                     break
                 p.wait_for_timeout(150)
+        if _confirm_open():
+            _lg("결제 전 확인 모달 열림")
         # 2) '결제 전 확인' 모달의 결제하기 → 결제 페이지 (모달 사라질 때까지, 로딩 넉넉히)
         for _attempt in range(8):
             if _over():
@@ -587,6 +605,7 @@ class Grabber:
             if _pay_page() or not _confirm_open():
                 break
             p.wait_for_timeout(400)
+            _lg(f"확인 모달 결제하기 클릭 시도 #{_attempt+1}")
             _click_pay(20)
             for _ in range(70):   # 최대 ~10.5s 대기(결제수단 페이지 로딩 지연 대비)
                 _clear_extend()
