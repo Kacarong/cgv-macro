@@ -239,6 +239,26 @@ class Grabber:
             p.wait_for_timeout(1000)
         return "movieBook" in p.url and "login" not in p.url
 
+    def wait_login_passive(self, timeout_s: int = 600) -> bool:
+        """현재 페이지(로그인 화면)를 '다시 이동시키지 않고' 로그인 완료만 기다린다.
+        사용자가 입력 중인 폼이 초기화되지 않도록 goto/reload 를 하지 않는다."""
+        p = self.page
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                if "movieBook" in p.url and "login" not in p.url:
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                p.wait_for_timeout(1000)
+            except Exception:  # noqa: BLE001
+                time.sleep(1)
+        try:
+            return "movieBook" in (p.url or "") and "login" not in (p.url or "")
+        except Exception:  # noqa: BLE001
+            return False
+
     def quick_login_check(self, timeout_ms: int = 7000) -> bool:
         """로그인 화면으로 잠깐 이동해 redirect 여부로 로그인 상태 판단. True=로그인 유지.
         로그인돼 있으면 CGV가 즉시 극장별예매로 리다이렉트하고, 아니면 로그인 화면에 머문다."""

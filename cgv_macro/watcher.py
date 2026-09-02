@@ -58,9 +58,10 @@ class Watcher:
         self._parked = False        # 좌석표에 머무는 중(빠른 재확인 경로)
 
     def _ensure_logged_in(self, log, allow_manual=True) -> bool:
-        """로그인 상태 확인. 풀렸으면 자동 재로그인(켜져 있으면) 시도, 아니면 수동 대기."""
+        """로그인 상태 확인. 풀렸으면 자동 재로그인(켜져 있으면) 시도, 아니면 '수동 대기'.
+        수동 대기 시에는 창을 다시 이동시키지 않아 사용자의 로그인 입력이 초기화되지 않는다."""
         try:
-            if self.grabber.quick_login_check():
+            if self.grabber.quick_login_check():   # 로그인 판정(여기서 로그인 페이지로 1회 이동)
                 return True
         except Exception:  # noqa: BLE001
             return True   # 판단 불가 시 진행
@@ -72,21 +73,26 @@ class Watcher:
                                cfg.get("twocaptcha", ""), log=log):
                 self._relogin_notified = False
                 return True
+        if not allow_manual:
+            return False
         if not self._relogin_notified:
             self._relogin_notified = True
-            log(f"[{self.tag}] ⚠️ 로그인 필요 — '① 로그인 준비'로 다시 로그인하세요")
+            log(f"[{self.tag}] 로그인이 필요합니다 — 이 창에서 직접 로그인하세요(입력이 초기화되지 않습니다). "
+                f"여러 창이면 중지 후 '① 로그인 준비'로 한 번에 로그인하는 게 편합니다")
             if self.notifier:
                 try:
                     self.notifier.notify_info("🔑 CGV 로그인 필요",
-                                              "세션이 만료됐어요. '① 로그인 준비'로 다시 로그인하거나 자동 재로그인을 켜세요.")
+                                              "이 창에서 로그인하면 감시가 이어집니다(자동 재로그인을 켜면 다음부턴 자동).")
                 except Exception:  # noqa: BLE001
                     pass
-        if allow_manual:
-            try:
-                return self.grabber.ensure_login(timeout_s=600)
-            except Exception:  # noqa: BLE001
-                return False
-        return False
+        # 이미 quick_login_check 가 로그인 페이지로 이동해둔 상태 → 다시 이동하지 않고 수동 로그인만 기다림
+        try:
+            ok = self.grabber.wait_login_passive(timeout_s=600)
+            if ok:
+                self._relogin_notified = False
+            return ok
+        except Exception:  # noqa: BLE001
+            return False
 
     def run(self, stop_event, log=None) -> None:
         log = log or logger.info
@@ -205,16 +211,20 @@ class Watcher:
                 else:
                     log(f"[{tag}] 미완료: {msg}")
             else:
-                # 예매가능 회차 없음 — 조용히 대기. 가끔 세션 점검(keep-alive + 만료 시 재로그인).
+                # 예매가능 회차 없음 — 조용히 대기. 가끔 keep-alive(단, 로그인 화면이면 절대 안 건드림).
                 idle_ticks += 1
                 if idle_ticks % 12 == 0:
-                    self._ensure_logged_in(log, allow_manual=False)
                     try:
-                        self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema",
-                                               wait_until="domcontentloaded")
+                        cur = (self.grabber.page.url or "").lower()
                     except Exception:  # noqa: BLE001
-                        pass
-                    log(f"[{tag}] 대기중(세션 유지)")
+                        cur = ""
+                    if "login" not in cur:   # 사용자가 로그인 중인 창은 이동시키지 않음
+                        try:
+                            self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema",
+                                                   wait_until="domcontentloaded")
+                        except Exception:  # noqa: BLE001
+                            pass
+                        log(f"[{tag}] 대기중(세션 유지)")
             # 주기에 지터를 섞어 여러 창이 동시에 요청하지 않게(차단 회피)
             self._sleep(interval + random.uniform(0, min(5.0, interval * 0.4)), stop_event)
         log(f"[{tag}] 종료")
