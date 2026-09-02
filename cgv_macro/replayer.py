@@ -390,9 +390,10 @@ class Grabber:
                         .filter(e=>{const t=(e.textContent||'').replace(/[^0-9]/g,'');return t!==''&&parseInt(t,10)===target&&vis(e);});
                       if(!cands.length) return null;
                       cands.sort((a,b)=>(a.textContent||'').replace(/\s+/g,'').length-(b.textContent||'').replace(/\s+/g,'').length);
-                      // 클릭은 '숫자 스팬'이 아니라 클릭 가능한 날짜 항목(조상)에 — 스팬 클릭이 안 먹는 관 대응
+                      // 클릭은 클릭 가능한 날짜 항목(조상)에. 가로 달력이므로 '가운데로 가로 스크롤'해서 화면에 들인다.
                       const item=cands[0].closest("[class*='dayScroll_scrollItem'],[class*='dayScroll_item'],li,button,a")||cands[0];
                       item.setAttribute('data-day','1');
+                      item.scrollIntoView({block:'nearest',inline:'center'});
                       return (cands[0].textContent||'').replace(/[^0-9]/g,'');
                     }"""
                     verify_date_js = r"""()=>{
@@ -806,46 +807,37 @@ class Grabber:
         return out
 
     def _click_seat_by_label(self, p, lb: str) -> bool:
-        """좌석표에서 라벨이 정확히 lb인 빈 좌석을 '지금' 찾아 클릭(위치 index 재사용 금지).
-        화면 밖(가로 스크롤 필요) 좌석도 Playwright 정상 클릭이 자동 스크롤해서 확실히 누른다."""
-        seats = p.locator(SEL_SEAT_OK)
-        for i in range(seats.count()):
-            el = seats.nth(i)
+        """라벨이 정확히 lb인 빈 좌석을 JS로 즉시 찾아 '가로/세로 가운데로 스크롤'한 뒤 클릭.
+        (좌석 100개를 하나씩 확인하지 않아 빠르고, 화면 밖 좌석도 스크롤해서 확실히 누름)"""
+        try:
+            ok = p.evaluate(r"""(lb)=>{
+              document.querySelectorAll('[data-seatpick]').forEach(e=>e.removeAttribute('data-seatpick'));
+              const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&e.offsetParent!==null;};
+              const els=[...document.querySelectorAll("[class*='seatNumber']")]
+                .filter(e=>(e.textContent||'').trim().toUpperCase()===lb&&vis(e));
+              if(!els.length) return 0;
+              const el=els[0];
+              const clk=el.closest("button,[role=button],a")||el.parentElement||el;
+              clk.setAttribute('data-seatpick','1');
+              clk.scrollIntoView({block:'center',inline:'center'});
+              return 1;}""", lb)
+        except Exception:  # noqa: BLE001
+            ok = 0
+        if not ok:
+            return False
+        p.wait_for_timeout(120)
+        loc = p.locator("[data-seatpick='1']").first
+        for how in ("normal", "force", "js"):
             try:
-                if (el.inner_text() or "").strip().upper() != lb:
-                    continue
+                if how == "normal":
+                    loc.click(timeout=3500)
+                elif how == "force":
+                    loc.click(force=True, timeout=2500)
+                else:
+                    loc.evaluate("e=>e.click()")
+                return True
             except Exception:  # noqa: BLE001
                 continue
-            try:
-                el.scroll_into_view_if_needed(timeout=2500)
-            except Exception:  # noqa: BLE001
-                pass
-            # 1) Playwright 정상 클릭 — 좌석까지 자동 스크롤 + actionability 보장(가장 신뢰)
-            try:
-                el.click(timeout=4000)
-                return True
-            except Exception:  # noqa: BLE001
-                pass
-            # 2) 강제 클릭(오버레이가 막을 때)
-            try:
-                el.click(force=True, timeout=2500)
-                return True
-            except Exception:  # noqa: BLE001
-                pass
-            # 3) 좌표 클릭(스크롤 후 뷰포트 안일 때만)
-            try:
-                box = el.bounding_box()
-                if box and box["height"] > 0 and box["y"] >= 0 and box["x"] >= 0:
-                    p.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-                    return True
-            except Exception:  # noqa: BLE001
-                pass
-            # 4) JS 클릭
-            try:
-                el.evaluate("e=>e.click()")
-                return True
-            except Exception:  # noqa: BLE001
-                return False
         return False
 
     def _pick_seats(self, page, total: int, prefer: str, preferred: list[str],
