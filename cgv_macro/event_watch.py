@@ -79,6 +79,12 @@ class EventWatcher:
         log(f"[{self.tag}] 감지 시작 (로그인은 예매 시점에만 확인)")
 
         while not stop_event.is_set() and not self._held():
+            if self.occupied:   # 이미 선점한 결제창 유지 — 시간연장 팝업 자동 '확인'
+                try:
+                    if self.grabber.click_extend_confirm(self.grabber.page):
+                        log(f"[{self.tag}] ⏳ 결제 시간 연장 '확인' 자동 클릭됨")
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 movies = cgv_api.list_movies()  # 매 사이클 최신화(개봉 전 신규 자동 포착)
             except Exception as e:  # noqa: BLE001

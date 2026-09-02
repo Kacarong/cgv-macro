@@ -88,6 +88,24 @@ MARK_SHOW_JS = r"""(a)=>{const {hhmm,movie}=a;
   return 'nf';}"""
 
 
+# '결제 가능 시간 안내'(연장하시겠습니까?) 팝업의 '확인'을 눌러 좌석 선점 시간을 연장.
+# 연장 안내 모달 안에서만 '확인'을 찾아 클릭(다른 확인 버튼 오클릭 방지). 1=클릭함.
+EXTEND_CONFIRM_JS = r"""()=>{
+  const norm=s=>(s||'').replace(/\s+/g,'');
+  const holders=[...document.querySelectorAll('div,section,article')].filter(e=>{
+    const t=e.textContent||'';
+    return t.includes('연장하시겠')||(t.includes('결제 가능 시간')&&t.includes('연장'));});
+  if(!holders.length) return 0;
+  holders.sort((a,b)=>(a.textContent||'').length-(b.textContent||'').length);
+  const modal=holders[0];
+  const btns=[...modal.querySelectorAll('button,a,div,span')].filter(e=>{
+    const t=norm(e.textContent); const r=e.getBoundingClientRect();
+    return t==='확인'&&r.width>10&&r.height>8&&e.offsetParent!==null;});
+  if(btns.length){ btns[0].click(); return 1; }
+  return 0;
+}"""
+
+
 def _classify(step: dict) -> str:
     cls = step.get("cls", "") or ""
     txt = (step.get("txt") or "").strip()
@@ -167,6 +185,13 @@ class Grabber:
 
     def __exit__(self, *exc) -> None:
         pass
+
+    def click_extend_confirm(self, page) -> bool:
+        """'결제 가능 시간 연장' 팝업이 있으면 '확인'을 눌러 좌석 선점을 연장. True=클릭함."""
+        try:
+            return bool(page.evaluate(EXTEND_CONFIRM_JS))
+        except Exception:  # noqa: BLE001
+            return False
 
     def export_state(self, path: str) -> None:
         """현재 로그인 세션(쿠키/스토리지)을 파일로 저장 → 다른 창에 주입해 로그인 공유."""

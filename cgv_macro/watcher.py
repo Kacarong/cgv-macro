@@ -210,6 +210,8 @@ class Watcher:
                                              "key": dup_key, "reached": reached})
                         except Exception:  # noqa: BLE001
                             pass
+                    # 결제할 때까지 좌석이 안 풀리게 '연장하시겠습니까?' 팝업을 자동 '확인'
+                    self._keep_payment_alive(stop_event, log)
                     break   # 이 창은 결제창으로 남기고 이 대상 감시 종료
                 else:
                     log(f"[{tag}] 미완료: {msg}")
@@ -235,6 +237,18 @@ class Watcher:
             # 주기에 지터를 섞어 여러 창이 동시에 요청하지 않게(차단 회피)
             self._sleep(interval + random.uniform(0, min(5.0, interval * 0.4)), stop_event)
         log(f"[{tag}] 종료")
+
+    def _keep_payment_alive(self, stop_event, log) -> None:
+        """좌석 선점 후 결제 전까지, '결제 가능 시간 연장' 팝업이 뜨면 자동으로 '확인'을 눌러
+        좌석이 안 풀리게 유지한다. (실제 결제는 사용자가 직접) 중지 전까지 이 창을 지킨다."""
+        log(f"[{self.tag}] 결제창 유지 — 시간연장 팝업이 뜨면 자동 '확인' (결제는 직접 하세요)")
+        while not stop_event.is_set():
+            try:
+                if self.grabber.click_extend_confirm(self.grabber.page):
+                    log(f"[{self.tag}] ⏳ 결제 시간 연장 '확인' 자동 클릭됨")
+            except Exception:  # noqa: BLE001
+                pass
+            self._sleep(6, stop_event)
 
     @staticmethod
     def _sleep(seconds: int, stop_event) -> None:
