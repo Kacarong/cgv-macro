@@ -886,4 +886,27 @@ class Grabber:
         if not picked:
             self._shot(p, "seat")
             return False, "", "좌석 클릭 실패 — 계속 감시"
+
+        # 실제 '선택됨' 검증(선택 좌석은 클래스에 select 표시). 감지되면 부족분 재클릭.
+        def _sel_labels():
+            try:
+                return p.evaluate(r"""()=>{const out=[];
+                  for(const b of document.querySelectorAll("button[class*='seatMap_seatNumber']")){
+                    const c=((b.className||'')+'').toLowerCase();
+                    const ap=((b.getAttribute('aria-pressed')||b.getAttribute('aria-selected')||'')+'').toLowerCase();
+                    if(c.includes('select')||ap==='true') out.push((b.textContent||'').trim().toUpperCase());}
+                  return out;}""") or []
+            except Exception:  # noqa: BLE001
+                return []
+        sel = _sel_labels()
+        if sel:   # 선택 마커 감지 가능한 경우에만 엄격 검증(감지 불가 시 기존 동작 유지)
+            if len(sel) < total:
+                for lb in list(dict.fromkeys(picked + targets)):
+                    if lb not in sel and self._click_seat_by_label(p, lb):
+                        p.wait_for_timeout(250)
+                sel = _sel_labels()
+            if len(sel) < total:
+                self._shot(p, "seat")
+                return False, "", f"좌석 선택 확인 실패({len(sel)}/{total}석) — 재시도"
+            picked = sel[:total]
         return True, ", ".join(picked), "ok"
