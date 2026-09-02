@@ -263,11 +263,19 @@ class App(ctk.CTk):
         self.rec_stat = ctk.CTkLabel(r1, text="", text_color=SUB); self.rec_stat.pack(side="left", padx=12)
 
         dc = self._card(sett, "디스코드 알림 (선택)")
-        drow = ctk.CTkFrame(dc, fg_color=PANEL); drow.pack(fill="x", padx=16, pady=(4, 12))
-        self.e_hook = ctk.CTkEntry(drow, placeholder_text="웹훅 URL", width=430, fg_color="#2A2A30")
+        drow = ctk.CTkFrame(dc, fg_color=PANEL); drow.pack(fill="x", padx=16, pady=(4, 4))
+        self.e_hook = ctk.CTkEntry(drow, placeholder_text="웹훅 URL (채널 알림)", width=430, fg_color="#2A2A30")
         self.e_hook.pack(side="left", padx=(6, 6))
         self.e_ment = ctk.CTkEntry(drow, placeholder_text="멘션 ID", width=140, fg_color="#2A2A30")
         self.e_ment.pack(side="left")
+        drow2 = ctk.CTkFrame(dc, fg_color=PANEL); drow2.pack(fill="x", padx=16, pady=(0, 4))
+        self.e_bot = ctk.CTkEntry(drow2, placeholder_text="봇 토큰 (DM 알림용)", show="●", width=340, fg_color="#2A2A30")
+        self.e_bot.pack(side="left", padx=(6, 6))
+        self.e_uid = ctk.CTkEntry(drow2, placeholder_text="내 Discord 유저 ID", width=200, fg_color="#2A2A30")
+        self.e_uid.pack(side="left")
+        ctk.CTkLabel(dc, text="DM으로 받으려면 봇 토큰 + 내 유저 ID를 넣으세요(둘 다 있으면 DM 우선). 봇과 같은 서버에 있어야\n"
+                             "하고 DM 허용이 켜져 있어야 합니다. 채널 알림만 원하면 웹훅 URL만 넣으면 됩니다.",
+                     text_color=SUB, wraplength=740, justify="left").pack(anchor="w", padx=16, pady=(0, 12))
 
         rl = self._card(sett, "자동 재로그인 (세션 만료 시 · 선택 · 기본 꺼짐)")
         rrow = ctk.CTkFrame(rl, fg_color=PANEL); rrow.pack(fill="x", padx=16, pady=(4, 4))
@@ -381,6 +389,8 @@ class App(ctk.CTk):
             "cancel": self.cancel_list, "open": self.open_list,
             "event_theaters": self.event_theaters, "days": int(self.dd_days.get()),
             "webhook": self.e_hook.get().strip(), "mention": self.e_ment.get().strip(),
+            "bot_token": self.e_bot.get().strip() if hasattr(self, "e_bot") else "",
+            "user_id": self.e_uid.get().strip() if hasattr(self, "e_uid") else "",
             "auto_relogin": bool(self.sw_relogin.get()) if hasattr(self, "sw_relogin") else False,
             "cgv_id": self.e_cid.get().strip() if hasattr(self, "e_cid") else "",
             "cgv_pw": self.e_cpw.get() if hasattr(self, "e_cpw") else "",
@@ -415,7 +425,9 @@ class App(ctk.CTk):
             self._refresh_event_theaters()
             if c.get("days"):
                 self.dd_days.set(str(c.get("days")))
-            for entry, val in ((self.e_hook, c.get("webhook", "")), (self.e_ment, c.get("mention", ""))):
+            for entry, val in ((self.e_hook, c.get("webhook", "")), (self.e_ment, c.get("mention", "")),
+                               (self.e_bot, c.get("bot_token", "")), (self.e_uid, c.get("user_id", "")),
+                               (self.e_cid, c.get("cgv_id", "")), (self.e_2cap, c.get("twocaptcha", ""))):
                 entry.delete(0, "end"); entry.insert(0, val or "")
             self._save()
             self._put(f"설정 불러옴: {path}")
@@ -531,6 +543,10 @@ class App(ctk.CTk):
             self.e_hook.insert(0, c["webhook"])
         if c.get("mention"):
             self.e_ment.insert(0, c["mention"])
+        if c.get("bot_token"):
+            self.e_bot.insert(0, c["bot_token"])
+        if c.get("user_id"):
+            self.e_uid.insert(0, c["user_id"])
         if c.get("auto_relogin"):
             self.sw_relogin.select()
         if c.get("cgv_id"):
@@ -645,10 +661,12 @@ class App(ctk.CTk):
             self._put("먼저 '① 로그인 준비'로 1회 로그인하세요(세션이 각 창에 공유됩니다)."); return
         recipe = json.load(open(RECIPE, encoding="utf-8"))
         webhook = self.e_hook.get().strip()
+        bot = self.e_bot.get().strip(); uid = self.e_uid.get().strip()
         notifier = None
-        if webhook:
+        if webhook or (bot and uid):
             from cgv_macro.notifier import DiscordNotifier
-            notifier = DiscordNotifier(webhook, self.e_ment.get().strip())
+            notifier = DiscordNotifier(webhook, self.e_ment.get().strip(), bot_token=bot, user_id=uid)
+            self._put("알림 방식: " + ("봇 DM" if (bot and uid) else "웹훅(채널)"))
         self._notifier = notifier
 
         from cgv_macro.watcher import Watcher

@@ -38,31 +38,67 @@ def _normalize_mention(m: str) -> str:
 
 
 class DiscordNotifier:
-    def __init__(self, webhook_url: str, mention: str = "") -> None:
-        self.webhook_url = webhook_url
+    def __init__(self, webhook_url: str = "", mention: str = "",
+                 bot_token: str = "", user_id: str = "") -> None:
+        self.webhook_url = (webhook_url or "").strip()
         self.mention = _normalize_mention(mention)
+        self.bot_token = (bot_token or "").strip()
+        self.user_id = (user_id or "").strip()
+        self.dm_mode = bool(self.bot_token and self.user_id)   # 봇 DM 방식
+        self._dm_channel = None
         self._last_error_ts = 0.0
 
+    # ---- 전송 대상(웹훅 채널 vs 봇 DM 채널) ----
+    def _dm_channel_id(self):
+        if self._dm_channel:
+            return self._dm_channel
+        try:
+            data = json.dumps({"recipient_id": self.user_id}).encode("utf-8")
+            req = urllib.request.Request(
+                "https://discord.com/api/v10/users/@me/channels", data=data,
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bot {self.bot_token}",
+                         "User-Agent": "cgv-macro/0.1"}, method="POST")
+            with urllib.request.urlopen(req, timeout=15) as r:
+                self._dm_channel = json.load(r).get("id")
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", "replace")[:200]
+            except Exception:  # noqa: BLE001
+                pass
+            logger.error("DM 채널 생성 실패(HTTP %s): %s %s (봇/유저ID/공유서버 확인)", e.code, e.reason, body)
+        except Exception as e:  # noqa: BLE001
+            logger.error("DM 채널 생성 실패: %s", e)
+        return self._dm_channel
+
+    def _endpoint(self):
+        if self.dm_mode:
+            cid = self._dm_channel_id()
+            return f"https://discord.com/api/v10/channels/{cid}/messages" if cid else None
+        return self.webhook_url or None
+
+    def _auth_headers(self) -> dict[str, str]:
+        h = {"User-Agent": "cgv-macro/0.1 DiscordWebhook"}
+        if self.dm_mode:
+            h["Authorization"] = f"Bot {self.bot_token}"
+        return h
+
     def _payload_with_mention(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if self.mention:
+        # DM 은 그 자체로 알림이 오므로 멘션 불필요. 웹훅만 멘션 핑 추가.
+        if self.mention and not self.dm_mode:
             payload["content"] = self.mention
-            # 웹훅이 유저/전체 멘션을 실제로 핑하도록 허용
             payload["allowed_mentions"] = {"parse": ["users", "everyone"]}
         return payload
 
     def _post(self, payload: dict[str, Any]) -> bool:
+        endpoint = self._endpoint()
+        if not endpoint:
+            logger.error("디스코드 전송 대상 없음(웹훅/봇 설정 확인)")
+            return False
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            self.webhook_url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                # 디스코드/Cloudflare 는 기본 'Python-urllib' UA 를 403 으로 차단하므로
-                # 반드시 정상적인 User-Agent 를 붙인다.
-                "User-Agent": "cgv-macro/0.1 (+https://github.com/) DiscordWebhook",
-            },
-            method="POST",
-        )
+        headers = {"Content-Type": "application/json", **self._auth_headers()}
+        req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return 200 <= resp.status < 300
@@ -98,11 +134,11 @@ class DiscordNotifier:
         parts.append(img + b"\r\n")
         parts.append(f"--{boundary}--\r\n".encode())
         body = b"".join(parts)
-        req = urllib.request.Request(
-            self.webhook_url, data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
-                     "User-Agent": "cgv-macro/0.1 DiscordWebhook"},
-            method="POST")
+        endpoint = self._endpoint()
+        if not endpoint:
+            return self._post(payload)
+        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}", **self._auth_headers()}
+        req = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 return 200 <= resp.status < 300
