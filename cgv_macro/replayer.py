@@ -92,17 +92,22 @@ MARK_SHOW_JS = r"""(a)=>{const {hhmm,movie}=a;
 # 연장 안내 모달 안에서만 '확인'을 찾아 클릭(다른 확인 버튼 오클릭 방지). 1=클릭함.
 EXTEND_CONFIRM_JS = r"""()=>{
   const norm=s=>(s||'').replace(/\s+/g,'');
-  const holders=[...document.querySelectorAll('div,section,article')].filter(e=>{
+  const vis=e=>{const r=e.getBoundingClientRect();return r.width>10&&r.height>8&&e.offsetParent!==null;};
+  const isOk=e=>{const t=norm(e.textContent);return (t==='확인'||t==='연장'||t==='연장하기')&&vis(e);};
+  // '연장' 안내 텍스트 + '확인' 버튼을 '함께' 품은 컨테이너만 모달로 인정(본문만 있는 조각 제외)
+  const holders=[...document.querySelectorAll('div,section,article,dialog')].filter(e=>{
     const t=e.textContent||'';
-    return t.includes('연장하시겠')||(t.includes('결제 가능 시간')&&t.includes('연장'));});
+    if(!(t.includes('연장하시겠')||(t.includes('결제 가능 시간')&&t.includes('연장')))) return false;
+    return [...e.querySelectorAll('button,a,div,span')].some(isOk);});
   if(!holders.length) return 0;
-  holders.sort((a,b)=>(a.textContent||'').length-(b.textContent||'').length);
+  holders.sort((a,b)=>(a.textContent||'').length-(b.textContent||'').length);   // 가장 안쪽(=모달)
   const modal=holders[0];
-  const btns=[...modal.querySelectorAll('button,a,div,span')].filter(e=>{
-    const t=norm(e.textContent); const r=e.getBoundingClientRect();
-    return t==='확인'&&r.width>10&&r.height>8&&e.offsetParent!==null;});
-  if(btns.length){ btns[0].click(); return 1; }
-  return 0;
+  const btns=[...modal.querySelectorAll('button,a,div,span')].filter(isOk);
+  if(!btns.length) return 0;
+  // '취소'는 제외됨. 확인 버튼 클릭(가장 아래=주버튼).
+  btns.sort((a,b)=>b.getBoundingClientRect().top-a.getBoundingClientRect().top);
+  btns[0].click();
+  return 1;
 }"""
 
 

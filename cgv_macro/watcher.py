@@ -251,7 +251,7 @@ class Watcher:
                     log(f"[{self.tag}] ⏳ 결제 시간 연장 '확인' 자동 클릭됨")
             except Exception:  # noqa: BLE001
                 pass
-            self._sleep(6, stop_event)
+            self._sleep(3, stop_event)
 
     @staticmethod
     def _sleep(seconds: int, stop_event) -> None:
