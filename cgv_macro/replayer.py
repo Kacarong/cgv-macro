@@ -745,46 +745,95 @@ class Grabber:
                     break
         return picked[:need]
 
+    @staticmethod
+    def _seat_labels(p) -> list:
+        seats = p.locator(SEL_SEAT_OK)
+        out = []
+        for i in range(seats.count()):
+            try:
+                lb = (seats.nth(i).inner_text() or "").strip().upper()
+            except Exception:  # noqa: BLE001
+                lb = ""
+            if lb:
+                out.append(lb)
+        return out
+
+    def _click_seat_by_label(self, p, lb: str) -> bool:
+        """좌석표에서 라벨이 정확히 lb인 빈 좌석을 '지금' 찾아 클릭(위치 index 재사용 금지)."""
+        seats = p.locator(SEL_SEAT_OK)
+        for i in range(seats.count()):
+            el = seats.nth(i)
+            try:
+                if (el.inner_text() or "").strip().upper() != lb:
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
+            try:
+                el.scroll_into_view_if_needed(timeout=1500)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                box = el.bounding_box()
+                if box and box["height"] > 0:
+                    p.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+            for how in ("force", "js"):
+                try:
+                    if how == "force":
+                        el.click(force=True, timeout=3000)
+                    else:
+                        el.evaluate("e=>e.click()")
+                    return True
+                except Exception:  # noqa: BLE001
+                    continue
+            return False
+        return False
+
     def _pick_seats(self, page, total: int, prefer: str, preferred: list[str],
                     only_preferred: bool) -> tuple[bool, str, str]:
         p = page
-        seats = p.locator(SEL_SEAT_OK)
-        sn = seats.count()
-        logger.info("[replay] 빈 좌석 %d개 (필요 %d)", sn, total)
-        if sn == 0:
+        labels = self._seat_labels(p)
+        logger.info("[replay] 빈 좌석 %d개 (필요 %d)", len(labels), total)
+        if not labels:
             self._shot(p, "seat"); return False, "", "빈 좌석 없음 — 계속 감시"
+        avail = set(labels)
 
-        def label(el):
-            return (el.inner_text() or "").strip().upper()
-
-        labels = [(label(seats.nth(i)), i) for i in range(sn)]
-        avail = {lb for lb, _ in labels}
-        chosen: list[int] = []
+        # 목표 좌석 '라벨' 결정
+        targets: list[str] = []
         if preferred:
-            for lb, idx in labels:
-                if lb in preferred:
-                    chosen.append(idx)
-            if only_preferred and len(chosen) < total:
-                got = [lb for lb in preferred if lb in avail]
+            for lb in preferred:
+                if lb in avail and lb not in targets:
+                    targets.append(lb)
+            if only_preferred and len(targets) < total:
                 self._shot(p, "seat")
-                return False, "", f"원하는 좌석 대기중(가능:{','.join(got) or '없음'}/필요 {total})"
-        if len(chosen) < total:
-            need = total - len(chosen)
-            remaining = [(lb, idx) for lb, idx in labels if idx not in chosen]
-            chosen.extend(self._auto_pick(remaining, need, prefer))
-        chosen = chosen[:total]
+                return False, "", f"원하는 좌석 대기중(가능:{','.join(targets) or '없음'}/필요 {total})"
+        if len(targets) < total:
+            remaining = [(lb, i) for i, lb in enumerate(labels) if lb not in targets]
+            for idx in self._auto_pick(remaining, total - len(targets), prefer):
+                if 0 <= idx < len(labels) and labels[idx] not in targets:
+                    targets.append(labels[idx])
+        # 중복 라벨 제거
+        seen = set(); uniq = []
+        for lb in targets:
+            if lb not in seen:
+                seen.add(lb); uniq.append(lb)
+        targets = uniq[:total]
 
-        picked = []
-        for idx in chosen:
-            el = seats.nth(idx)
-            picked.append(label(el))
-            # modal-bg 오버레이가 막아도 눌리도록 강제/직접 클릭
-            try:
-                el.click(force=True, timeout=4000)
-            except Exception:  # noqa: BLE001
-                try:
-                    el.evaluate("e=>e.click()")
-                except Exception:  # noqa: BLE001
-                    pass
-            p.wait_for_timeout(200)
-        return True, ", ".join([x for x in picked if x]) or f"{len(chosen)}석", "ok"
+        # 라벨별로 '매번 새로 찾아' 클릭(선택하면 좌석표가 바뀌므로 index 재사용 금지)
+        picked: list[str] = []
+        for lb in targets:
+            if self._click_seat_by_label(p, lb):
+                picked.append(lb)
+                p.wait_for_timeout(250)
+            elif not only_preferred:
+                # 그 좌석이 사라졌으면 다른 빈자리로 대체
+                for alt in self._seat_labels(p):
+                    if alt not in picked and self._click_seat_by_label(p, alt):
+                        picked.append(alt); p.wait_for_timeout(250); break
+        picked = [x for x in dict.fromkeys(picked) if x]   # 중복/빈값 제거
+        if not picked:
+            self._shot(p, "seat")
+            return False, "", "좌석 클릭 실패 — 계속 감시"
+        return True, ", ".join(picked), "ok"
