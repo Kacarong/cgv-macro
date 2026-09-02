@@ -367,7 +367,13 @@ class Grabber:
                       const el=items.find(e=>parseInt(dig(e.textContent),10)===parseInt(dd,10));
                       if(!el) return null; el.setAttribute('data-day','1'); return dig(el.textContent);
                     }"""
-                    got = p.evaluate(mark_date_js, day_num)
+                    # 창이 막 떠서 달력이 아직 안 그려졌을 수 있으니 뜰 때까지 최대 ~8초 폴링
+                    got = None
+                    for _ in range(27):
+                        got = p.evaluate(mark_date_js, day_num)
+                        if got:
+                            break
+                        p.wait_for_timeout(300)
                     if got:
                         loc = p.locator("[data-day='1']").first
                         try:
@@ -383,7 +389,7 @@ class Grabber:
                                 pass
                         _lg(f"날짜 {got}일 선택")
                     else:
-                        _lg(f"날짜 {day_num}일 못 찾음(달력에 안 보임?)")
+                        _lg(f"날짜 {day_num}일 못 찾음(달력 로딩 지연?)")
                     p.wait_for_timeout(1500)
 
                 elif kind == "showtime":
