@@ -85,9 +85,11 @@ class DiscordNotifier:
         return h
 
     def _payload_with_mention(self, payload: dict[str, Any]) -> dict[str, Any]:
-        # DM 은 그 자체로 알림이 오므로 멘션 불필요. 웹훅만 멘션 핑 추가.
-        if self.mention and not self.dm_mode:
-            payload["content"] = self.mention
+        m = self.mention
+        if not m and self.dm_mode and self.user_id:
+            m = f"<@{self.user_id}>"   # DM이면 본인 멘션으로 확실히 핑
+        if m:
+            payload["content"] = m
             payload["allowed_mentions"] = {"parse": ["users", "everyone"]}
         return payload
 

@@ -144,6 +144,7 @@ class Watcher:
 
         idle_ticks = 0
         backoff = 0
+        polls = 0
         while not stop_event.is_set():
             try:
                 shows = cgv_api.fetch_showtimes(mov_no, site_no, _scnymd(date_key))
@@ -158,6 +159,10 @@ class Watcher:
                 log(f"[{tag}] 조회 오류: {e}")
                 self._sleep(interval, stop_event)
                 continue
+
+            polls += 1
+            if polls == 1 or polls % 6 == 0:   # 살아있음 하트비트(취소표/오픈 각각 tag로 구분됨)
+                log(f"[{tag}] 감시중 ✓ ({polls}회 확인 · 현재 회차 {len(shows)}개)")
 
             cands = [
                 s for s in shows
@@ -194,13 +199,12 @@ class Watcher:
                     if reached:
                         self.grabbed_keys.add(dup_key)   # 결제 페이지 도달분만 중복기록(미도달은 재시도 허용)
                     log(f"[{tag}] ✅ 좌석 {'선점(결제페이지)' if reached else '선택(결제하기 미도달)'}: {seat} — {msg}")
-                    shot = os.path.join(paths.data_dir(), f"grab_{_shot_prefix(tag)}payment.png")
                     if self.notifier:
                         try:
                             self.notifier.notify_held_image(
                                 movie=mov_nm, theater=site_nm, date=date_key, showtime=s.time,
                                 screen=f"{s.screen} ({s.fmt})", seat_info=seat,
-                                image_path=shot if os.path.exists(shot) else "", reached=reached)
+                                image_path="", reached=reached)
                         except Exception:  # noqa: BLE001
                             pass
                     if self.on_success:
@@ -233,7 +237,6 @@ class Watcher:
                                                    wait_until="commit", timeout=20000)
                         except Exception:  # noqa: BLE001
                             pass
-                        log(f"[{tag}] 대기중 — 예매가능 회차 없음(감시 중)")
             # 주기에 지터를 섞어 여러 창이 동시에 요청하지 않게(차단 회피)
             self._sleep(interval + random.uniform(0, min(5.0, interval * 0.4)), stop_event)
         log(f"[{tag}] 종료")

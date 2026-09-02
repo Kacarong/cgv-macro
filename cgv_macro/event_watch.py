@@ -145,13 +145,11 @@ class EventWatcher:
                                 self.occupied = True
                                 self.held_payment = True
                                 log(f"[{self.tag}] ✅ 좌석 선점: {mov_nm} {seat} — {msg} (결제창 유지)")
-                                shot = os.path.join(paths.data_dir(), "grab_evpayment.png")
                                 if self.notifier:
                                     try:
                                         self.notifier.notify_held_image(
                                             movie=mov_nm, theater=site_nm, date=disp, showtime=s.time,
-                                            screen=s.screen, seat_info=seat,
-                                            image_path=shot if os.path.exists(shot) else "")
+                                            screen=s.screen, seat_info=seat, image_path="")
                                     except Exception:  # noqa: BLE001
                                         pass
                                 if self.on_success:
