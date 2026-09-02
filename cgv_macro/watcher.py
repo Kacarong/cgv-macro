@@ -7,10 +7,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import random
+import re
 import time
 from contextlib import nullcontext
 
-from . import cgv_api
+from . import cgv_api, paths
 from .replayer import Grabber
 
 logger = logging.getLogger("cgv_macro")
@@ -21,17 +24,33 @@ def _scnymd(date: str) -> str:
     return (date or "").replace("-", "").replace(".", "").strip()
 
 
+def _in_window(hhmm: str, tfrom: str, tto: str) -> bool:
+    """회차 시간이 [tfrom, tto] 범위 안인지(빈 값은 무제한)."""
+    if tfrom and hhmm < tfrom:
+        return False
+    if tto and hhmm > tto:
+        return False
+    return True
+
+
+def _shot_prefix(tag: str) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣]", "", tag)[:16] or "w"
+
+
 class Watcher:
     """대상 1개를 '독립된 크롬 창 1개'에서 감시·선점. 성공하면 그 창을 결제창으로 유지."""
 
     def __init__(self, recipe: dict, target: dict, notifier=None,
-                 storage_state: str | None = None, win_pos=None, tag: str = "감시") -> None:
+                 storage_state: str | None = None, win_pos=None, tag: str = "감시",
+                 grabbed_keys: set | None = None, on_success=None) -> None:
         self.recipe = recipe
         self.t = target
         self.notifier = notifier
         self.storage_state = storage_state   # 저장된 로그인 세션(공유 로그인)
         self.win_pos = win_pos
         self.tag = tag
+        self.grabbed_keys = grabbed_keys if grabbed_keys is not None else set()  # 중복 예매 방지(공유)
+        self.on_success = on_success         # 성공 시 콜백(소리/팝업/영속화)
         self.grabber: Grabber | None = None
         self.held_payment = False   # 좌석 선점(결제창 도달) 여부
 
@@ -46,6 +65,8 @@ class Watcher:
             log(f"[{tag}] 영화/극장 해석 실패: {e}")
             return
         target_time = (t.get("time") or "").strip()
+        tfrom = (t.get("time_from") or "").strip()
+        tto = (t.get("time_to") or "").strip()
         persons = {k: int(v) for k, v in (t.get("persons") or {"일반": 2}).items() if int(v) > 0}
         need = sum(persons.values()) or 1
         preferred = t.get("preferred") or []
@@ -53,14 +74,20 @@ class Watcher:
         prefer = t.get("prefer", "center")
         interval = max(5, int(t.get("interval", 10)))
         screen_type = (t.get("screen_type") or "").strip()
+        date_key = t.get("date", "")
+        dup_key = f"{mov_no}|{site_no}|{_scnymd(date_key)}|{target_time}"
 
-        log(f"[{tag}] 창 열기: {mov_nm} / {site_nm} / {t.get('date')} "
-            f"{target_time or '(전체 회차)'} / 좌석 {need}석 "
+        log(f"[{tag}] 창 열기: {mov_nm} / {site_nm} / {date_key} "
+            f"{target_time or (tfrom+'~'+tto if (tfrom or tto) else '(전체 회차)')} / 좌석 {need}석 "
             f"{'/ 원하는좌석 '+','.join(preferred) if preferred else ''}")
+
+        if dup_key in self.grabbed_keys:
+            log(f"[{tag}] 이미 예매한 회차 — 건너뜀(중복 예매 방지)")
+            return
 
         try:
             self.grabber = Grabber(headless=False, storage_state=self.storage_state,
-                                   win_pos=self.win_pos).__enter__()
+                                   win_pos=self.win_pos, shot_prefix=_shot_prefix(tag)).__enter__()
         except Exception as e:  # noqa: BLE001
             log(f"[{tag}] 크롬 실행 실패: {e}")
             return
@@ -75,9 +102,17 @@ class Watcher:
         log(f"[{tag}] 로그인 확인 → 감시 시작")
 
         idle_ticks = 0
+        backoff = 0
         while not stop_event.is_set():
             try:
-                shows = cgv_api.fetch_showtimes(mov_no, site_no, _scnymd(t.get("date", "")))
+                shows = cgv_api.fetch_showtimes(mov_no, site_no, _scnymd(date_key))
+                backoff = 0
+            except cgv_api.CgvRateLimited:
+                backoff = min(backoff + 1, 6)
+                wait = min(20 * (2 ** backoff), 600)   # 40s→...→최대 10분
+                log(f"[{tag}] 요청 과다(429) — {wait}s 대기 후 재시도")
+                self._sleep(wait, stop_event)
+                continue
             except Exception as e:  # noqa: BLE001
                 log(f"[{tag}] 조회 오류: {e}")
                 self._sleep(interval, stop_event)
@@ -87,6 +122,7 @@ class Watcher:
                 s for s in shows
                 if s.remaining >= need
                 and (not target_time or s.time == target_time)
+                and _in_window(s.time, tfrom, tto)
                 and (not screen_type or screen_type.lower() in (s.screen + " " + s.fmt).lower())
             ]
             if cands:
@@ -94,21 +130,28 @@ class Watcher:
                 log(f"[{tag}] 예매가능 감지: {s.time} {s.screen} 잔여{s.remaining} → 좌석 잡기 시도")
                 try:
                     ok, seat, msg = self.grabber.replay(
-                        self.recipe, day=t.get("date", ""), hhmm=s.time, movie=mov_nm,
+                        self.recipe, day=date_key, hhmm=s.time, movie=mov_nm,
                         persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer)
                 except Exception as e:  # noqa: BLE001
                     ok, seat, msg = False, "", f"좌석잡기 오류: {e}"
                 if ok:
                     self.held_payment = True
+                    self.grabbed_keys.add(dup_key)
                     log(f"[{tag}] ✅ 좌석 선점 완료: {seat} — {msg} (이 창은 결제용으로 유지)")
+                    shot = os.path.join(paths.data_dir(), f"grab_{_shot_prefix(tag)}payment.png")
                     if self.notifier:
                         try:
-                            self.notifier.notify_showtime(
-                                kind="seat_held", target_name=t.get("name", mov_nm),
-                                movie=mov_nm, theater=site_nm, date=t.get("date", ""),
-                                showtime=s.time, screen=f"{s.screen} ({s.fmt})",
-                                status_text=msg, seat_info=seat,
-                                booking_url="https://cgv.co.kr/cnm/movieBook/cinema")
+                            self.notifier.notify_held_image(
+                                movie=mov_nm, theater=site_nm, date=date_key, showtime=s.time,
+                                screen=f"{s.screen} ({s.fmt})", seat_info=seat,
+                                image_path=shot if os.path.exists(shot) else "")
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if self.on_success:
+                        try:
+                            self.on_success({"tag": tag, "movie": mov_nm, "theater": site_nm,
+                                             "date": date_key, "time": s.time, "seat": seat,
+                                             "key": dup_key})
                         except Exception:  # noqa: BLE001
                             pass
                     break   # 이 창은 결제창으로 남기고 이 대상 감시 종료
@@ -124,7 +167,8 @@ class Watcher:
                     except Exception:  # noqa: BLE001
                         pass
                     log(f"[{tag}] 대기중(세션 유지)")
-            self._sleep(interval, stop_event)
+            # 주기에 지터를 섞어 여러 창이 동시에 요청하지 않게(차단 회피)
+            self._sleep(interval + random.uniform(0, min(5.0, interval * 0.4)), stop_event)
         log(f"[{tag}] 종료")
 
     @staticmethod

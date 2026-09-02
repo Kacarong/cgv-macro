@@ -121,11 +121,13 @@ def clone_profile(idx: int) -> str:
 
 class Grabber:
     def __init__(self, headless: bool = False, profile_dir: str | None = None,
-                 storage_state: str | None = None, win_pos: tuple[int, int] | None = None) -> None:
+                 storage_state: str | None = None, win_pos: tuple[int, int] | None = None,
+                 shot_prefix: str = "") -> None:
         self.headless = headless
         self.profile = profile_dir or PROFILE
         self.storage_state = storage_state   # 지정 시: 저장된 로그인 세션으로 독립 창(병렬용)
         self.win_pos = win_pos
+        self.shot_prefix = shot_prefix       # 스크린샷 파일 접두(창별 충돌 방지)
         self._pw = None
         self._browser = None
         self._ctx = None
@@ -206,7 +208,7 @@ class Grabber:
 
     def _shot(self, page, name: str) -> None:
         try:
-            page.screenshot(path=os.path.join(paths.data_dir(), f"grab_{name}.png"))
+            page.screenshot(path=os.path.join(paths.data_dir(), f"grab_{self.shot_prefix}{name}.png"))
         except Exception:  # noqa: BLE001
             pass
 

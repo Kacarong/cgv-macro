@@ -12,12 +12,13 @@ CGV 회차 API(searchSchByMov)는 극장(siteNo)을 반드시 요구하므로
 from __future__ import annotations
 
 import logging
+import os
 import random
 import time
 from contextlib import nullcontext
 from datetime import date, timedelta
 
-from . import cgv_api
+from . import cgv_api, paths
 from .replayer import Grabber
 
 logger = logging.getLogger("cgv_macro")
@@ -27,7 +28,8 @@ _NULL_LOCK = nullcontext()
 class EventWatcher:
     def __init__(self, recipe: dict, theaters: list[tuple[str, str]],
                  base: dict, notifier=None, days: int = 7,
-                 storage_state: str | None = None, win_pos=None, tag: str = "무대인사") -> None:
+                 storage_state: str | None = None, win_pos=None, tag: str = "무대인사",
+                 on_success=None) -> None:
         # theaters: [(siteNo, siteNm), ...]
         self.recipe = recipe
         self.theaters = theaters
@@ -37,6 +39,7 @@ class EventWatcher:
         self.storage_state = storage_state
         self.win_pos = win_pos
         self.tag = tag
+        self.on_success = on_success
         self.grabber: Grabber | None = None
         self.seen: set[str] = set()
         self.occupied = False
@@ -65,7 +68,7 @@ class EventWatcher:
 
         try:
             self.grabber = Grabber(headless=False, storage_state=self.storage_state,
-                                   win_pos=self.win_pos).__enter__()
+                                   win_pos=self.win_pos, shot_prefix="ev").__enter__()
         except Exception as e:  # noqa: BLE001
             log(f"[{self.tag}] 크롬 실행 실패: {e}")
             return
@@ -101,6 +104,10 @@ class EventWatcher:
                         return False
                     try:
                         shows = cgv_api.fetch_showtimes(mov_no, site_no, ymd)
+                    except cgv_api.CgvRateLimited:
+                        log(f"[{self.tag}] 요청 과다(429) — 30s 대기")
+                        self._sleep(30, stop_event)
+                        continue
                     except Exception:  # noqa: BLE001
                         time.sleep(0.4)
                         continue
@@ -135,8 +142,22 @@ class EventWatcher:
                                 self.occupied = True
                                 self.held_payment = True
                                 log(f"[{self.tag}] ✅ 좌석 선점: {mov_nm} {seat} — {msg} (결제창 유지)")
-                                self._notify("seat_held", mov_nm, site_nm, disp, s.time,
-                                             s.screen, msg, seat)
+                                shot = os.path.join(paths.data_dir(), "grab_evpayment.png")
+                                if self.notifier:
+                                    try:
+                                        self.notifier.notify_held_image(
+                                            movie=mov_nm, theater=site_nm, date=disp, showtime=s.time,
+                                            screen=s.screen, seat_info=seat,
+                                            image_path=shot if os.path.exists(shot) else "")
+                                    except Exception:  # noqa: BLE001
+                                        pass
+                                if self.on_success:
+                                    try:
+                                        self.on_success({"tag": self.tag, "movie": mov_nm,
+                                                         "theater": site_nm, "date": disp,
+                                                         "time": s.time, "seat": seat, "key": key})
+                                    except Exception:  # noqa: BLE001
+                                        pass
                             else:
                                 log(f"[{self.tag}] 미완료: {msg} — 계속 감시")
                         else:

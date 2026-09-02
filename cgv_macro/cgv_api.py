@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -38,11 +39,21 @@ class CgvApiError(Exception):
     pass
 
 
+class CgvRateLimited(CgvApiError):
+    """429 등 요청 과다 — 호출부에서 백오프."""
+    pass
+
+
 def _get(path: str, **params) -> Any:
     url = f"{BASE}/{path}?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers=_HEADERS)
-    with urllib.request.urlopen(req, timeout=20) as r:
-        d = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code in (429, 503):
+            raise CgvRateLimited(f"요청 과다({e.code})")
+        raise CgvApiError(f"HTTP {e.code} {path}")
     if not isinstance(d, dict):
         raise CgvApiError(f"예상치 못한 응답: {path}")
     if str(d.get("statusCode")) not in ("0", "200"):

@@ -29,6 +29,7 @@ SUB = "#9A9AA2"
 CONFIG = os.path.join(paths.data_dir(), "app_config.json")
 RECIPE = os.path.join(paths.data_dir(), "recipe.json")
 STATE_JSON = os.path.join(paths.data_dir(), "cgv_state.json")   # 로그인 세션(창 공유용)
+GRABBED_JSON = os.path.join(paths.data_dir(), "grabbed.json")   # 이미 선점한 회차(중복 방지)
 SCREENS = ["전체", "2D", "IMAX", "4DX", "SCREENX", "DOLBY ATMOS", "ULTRA 4DX"]
 WD = ["월", "화", "수", "목", "금", "토", "일"]
 
@@ -61,6 +62,8 @@ class App(ctk.CTk):
         self._notifier = None
         self.master_ready = False
         self._logging_in = False
+        self.success_q: "queue.Queue" = queue.Queue()
+        self.grabbed_keys: set = _load_grabbed()   # 이미 선점한 회차키(중복 예매 방지)
 
         self.cancel_list: list[dict] = []      # 취소표 감지 대상
         self.open_list: list[dict] = []        # 상영오픈 감지 대상
@@ -144,6 +147,14 @@ class App(ctk.CTk):
         ns["time"].grid(row=3, column=0, columnspan=2, sticky="ew", padx=6, pady=(0, 6))
         ctk.CTkButton(grid, text="회차 불러오기", fg_color="#33333A", hover_color="#44444C",
                       command=lambda: self._load_times(ns)).grid(row=3, column=2, sticky="ew", padx=6, pady=(0, 6))
+        # 시간대 필터(회차를 '전체(자동)'로 둘 때, 이 범위 안의 회차만 감시)
+        hours = ["전체"] + [f"{h:02d}" for h in range(6, 27)]
+        lab(4, 0, "시간대(선택)")
+        ns["tfrom"] = self._dd(grid, hours); ns["tfrom"].set("전체")
+        ns["tto"] = self._dd(grid, hours); ns["tto"].set("전체")
+        ns["tfrom"].grid(row=5, column=0, sticky="ew", padx=6, pady=(0, 8))
+        ctk.CTkLabel(grid, text="~ 시", text_color=SUB).grid(row=5, column=1, sticky="w")
+        ns["tto"].grid(row=5, column=2, sticky="ew", padx=6, pady=(0, 8))
 
         self._ps_card(parent, ns)
         self.panels.append(ns)
@@ -257,14 +268,18 @@ class App(ctk.CTk):
         self.e_ment = ctk.CTkEntry(drow, placeholder_text="멘션 ID", width=140, fg_color="#2A2A30")
         self.e_ment.pack(side="left")
 
-        self._note(sett, "권장 사용법: '① 로그인 준비'로 크롬을 띄워 1회 로그인하고 그 창을 그대로 두세요. 크롬 1개를 계속\n"
-                         "재사용하므로 재로그인이 거의 필요 없습니다. '중지'해도 크롬은 로그인된 채 유지, 프로그램 종료 때만 닫힙니다.\n"
+        oc = self._card(sett, "기타")
+        orow = ctk.CTkFrame(oc, fg_color=PANEL); orow.pack(fill="x", padx=16, pady=(4, 12))
+        ctk.CTkButton(orow, text="중복 예매 기록 초기화", fg_color="#33333A", hover_color="#44444C",
+                      command=self._clear_grabbed).pack(side="left")
+        ctk.CTkLabel(orow, text="(이미 잡은 회차를 다시 잡게 하려면 초기화)", text_color=SUB).pack(side="left", padx=10)
+
+        self._note(sett, "사용 순서: (1) '① 로그인 준비'로 크롬에서 1회 로그인(캡챠 포함) → 세션 저장·닫힘. (2) 각 탭에서 대상 추가.\n"
+                         "(3) '② 감시 시작' → 대상마다 '독립 크롬 창'이 열려 진짜 병렬로 감시(로그인 공유, 재로그인 없음).\n"
                          "\n"
-                         "24시간 무인 운용: 앱이 2분마다 CGV 예매 페이지에 접속해 세션을 살려두고(keep-alive), 6분마다 로그인\n"
-                         "상태를 점검해 풀리면 로그·디스코드로 '로그인 필요' 알림을 줍니다. (CGV는 자동로그인이 없어 keep-alive로 유지)\n"
-                         "\n"
-                         "동시 선점: 하나를 잡아도 감시는 계속되고, 잡을 때마다 '새 탭'으로 서로 다른 회차의 결제창을 동시에\n"
-                         "유지합니다(최대 5개). 다만 CGV가 한 계정 동시 예매를 막으면 나중 것이 앞 것을 밀어낼 수 있어요(그땐 계정 분리 필요).")
+                         "좌석을 잡으면: 소리 + 프로그램 창이 앞으로 + 팝업 + 디스코드 멘션/결제화면 스샷 알림이 갑니다.\n"
+                         "이미 잡은 회차는 재시작해도 다시 안 잡습니다(중복 예매 방지). 시간대 필터로 원하는 시간대 회차만 감시 가능.\n"
+                         "요청 과다(429) 시 자동으로 대기 후 재시도합니다.")
 
     # ---------- 데이터 로드 ----------
     def _load_lists(self):
@@ -322,9 +337,57 @@ class App(ctk.CTk):
                 self.logbox.configure(state="disabled")
         except queue.Empty:
             pass
+        try:
+            while True:
+                info = self.success_q.get_nowait()
+                self._alert(info)
+        except queue.Empty:
+            pass
         self.rec_stat.configure(text=("녹화됨 ✓" if os.path.exists(RECIPE) else "녹화 없음"),
                                 text_color=(GREEN if os.path.exists(RECIPE) else RED))
         self.after(300, self._drain)
+
+    # ---------- 성공 알림(소리/앞으로/팝업) ----------
+    def _clear_grabbed(self):
+        self.grabbed_keys = set()
+        _save_grabbed(self.grabbed_keys)
+        self._put("중복 예매 기록 초기화됨.")
+
+    def _on_seat_success(self, info):
+        """워커 스레드에서 호출 — 중복키 영속화 + 메인스레드 알림 큐로 전달."""
+        try:
+            self.grabbed_keys.add(info.get("key", ""))
+            _save_grabbed(self.grabbed_keys)
+        except Exception:  # noqa: BLE001
+            pass
+        self.success_q.put_nowait(info)
+
+    def _alert(self, info):
+        try:
+            import winsound
+            for _ in range(3):
+                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:  # noqa: BLE001
+            try:
+                self.bell()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            self.deiconify(); self.lift()
+            self.attributes("-topmost", True)
+            self.after(1500, lambda: self.attributes("-topmost", False))
+        except Exception:  # noqa: BLE001
+            pass
+        self.stat.configure(text="● 좌석 선점! 결제하세요", text_color=RED)
+        msg = (f"좌석을 잡았습니다!\n\n{info.get('movie','')} · {info.get('theater','')}\n"
+               f"{info.get('date','')} {info.get('time','')}  좌석 {info.get('seat','')}\n\n"
+               f"해당 크롬 창에서 결제하세요.")
+        self._put(f"🔔🔔 [{info.get('tag','')}] 좌석 선점! {info.get('seat','')} — 결제창에서 결제하세요")
+        try:
+            from tkinter import messagebox
+            messagebox.showinfo("CGV 좌석 선점 완료", msg)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---------- 녹화 ----------
     def _rec_open(self):
@@ -370,6 +433,8 @@ class App(ctk.CTk):
             "date_label": ns["date"].get(),
             "time": ns["time_map"].get(ns["time"].get(), ""),
             "time_label": ns["time"].get(),
+            "time_from": "" if ns.get("tfrom") is None or ns["tfrom"].get() == "전체" else f"{ns['tfrom'].get()}:00",
+            "time_to": "" if ns.get("tto") is None or ns["tto"].get() == "전체" else f"{ns['tto'].get()}:59",
             "screen_type": "" if ns["screen"].get() == "전체" else ns["screen"].get(),
             "webhook": self.e_hook.get().strip(),
             "mention": self.e_ment.get().strip(),
@@ -525,17 +590,19 @@ class App(ctk.CTk):
         i = 0
         for t in list(self.cancel_list):
             workers.append(Watcher(recipe, t, notifier, storage_state=STATE_JSON, win_pos=pos(i),
-                                   tag=f"취소#{i+1} {t.get('movie','')[:6]}")); i += 1
+                                   tag=f"취소#{i+1} {t.get('movie','')[:6]}",
+                                   grabbed_keys=self.grabbed_keys, on_success=self._on_seat_success)); i += 1
         for t in list(self.open_list):
             workers.append(Watcher(recipe, t, notifier, storage_state=STATE_JSON, win_pos=pos(i),
-                                   tag=f"오픈#{i+1} {t.get('movie','')[:6]}")); i += 1
+                                   tag=f"오픈#{i+1} {t.get('movie','')[:6]}",
+                                   grabbed_keys=self.grabbed_keys, on_success=self._on_seat_success)); i += 1
         if self.event_theaters:
             ths = [(self.theaters[nm][0], nm) for nm in self.event_theaters if nm in self.theaters]
             if ths:
                 base = self._read_ps(self.ns_event)
                 workers.append(EventWatcher(recipe, ths, base, notifier, days=int(self.dd_days.get()),
                                             storage_state=STATE_JSON, win_pos=pos(i),
-                                            tag=f"무대인사#{i+1}")); i += 1
+                                            tag=f"무대인사#{i+1}", on_success=self._on_seat_success)); i += 1
         if not workers:
             self._put("감시할 대상이 없습니다. 각 탭에서 대상/극장을 추가하세요."); return
 
@@ -611,6 +678,20 @@ def load_cfg() -> dict:
 
 def save_cfg(d: dict) -> None:
     json.dump(d, open(CONFIG, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+
+
+def _load_grabbed() -> set:
+    try:
+        return set(json.load(open(GRABBED_JSON, encoding="utf-8")))
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _save_grabbed(keys: set) -> None:
+    try:
+        json.dump(sorted(keys), open(GRABBED_JSON, "w", encoding="utf-8"), ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def main() -> int:

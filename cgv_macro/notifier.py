@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import urllib.request
 import urllib.error
@@ -75,6 +76,58 @@ class DiscordNotifier:
         except Exception as e:  # noqa: BLE001
             logger.error("디스코드 전송 실패: %s", e)
         return False
+
+    def _post_multipart(self, payload: dict[str, Any], image_path: str) -> bool:
+        """embed + 이미지 첨부를 multipart 로 전송(결제 화면 스크린샷용)."""
+        try:
+            with open(image_path, "rb") as f:
+                img = f.read()
+        except Exception:  # noqa: BLE001
+            return self._post(payload)   # 이미지 없으면 텍스트로라도
+        boundary = "----cgvmacro7f3b2a"
+        fname = os.path.basename(image_path) or "shot.png"
+        pj = json.dumps(payload).encode("utf-8")
+        parts = []
+        parts.append(f"--{boundary}\r\n".encode())
+        parts.append(b'Content-Disposition: form-data; name="payload_json"\r\n')
+        parts.append(b"Content-Type: application/json\r\n\r\n")
+        parts.append(pj + b"\r\n")
+        parts.append(f"--{boundary}\r\n".encode())
+        parts.append(f'Content-Disposition: form-data; name="files[0]"; filename="{fname}"\r\n'.encode())
+        parts.append(b"Content-Type: image/png\r\n\r\n")
+        parts.append(img + b"\r\n")
+        parts.append(f"--{boundary}--\r\n".encode())
+        body = b"".join(parts)
+        req = urllib.request.Request(
+            self.webhook_url, data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                     "User-Agent": "cgv-macro/0.1 DiscordWebhook"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return 200 <= resp.status < 300
+        except Exception as e:  # noqa: BLE001
+            logger.error("디스코드 이미지 전송 실패: %s", e)
+            return self._post(payload)
+
+    def notify_held_image(self, *, movie: str, theater: str, date: str, showtime: str,
+                          screen: str, seat_info: str, image_path: str = "") -> bool:
+        """좌석 선점 완료 — 멘션 + 결제 화면 스크린샷 첨부."""
+        embed = {
+            "title": "🪑 좌석 선점 완료 — 결제만 하면 됩니다!",
+            "color": _COLOR["seat_held"],
+            "fields": [
+                {"name": "영화", "value": movie or "-", "inline": True},
+                {"name": "극장", "value": theater or "-", "inline": True},
+                {"name": "상영관", "value": screen or "-", "inline": True},
+                {"name": "날짜/시간", "value": f"{date} {showtime}".strip() or "-", "inline": True},
+                {"name": "좌석", "value": seat_info or "-", "inline": True},
+            ],
+        }
+        payload = self._payload_with_mention({"embeds": [embed]})
+        if image_path:
+            return self._post_multipart(payload, image_path)
+        return self._post(payload)
 
     def notify_showtime(
         self,
