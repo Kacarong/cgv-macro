@@ -114,6 +114,8 @@ class Watcher:
         preferred = t.get("preferred") or []
         only_pref = bool(t.get("only_preferred"))
         prefer = t.get("prefer", "center")
+        region = {"row_from": t.get("row_from", ""), "row_to": t.get("row_to", ""),
+                  "num_from": t.get("num_from"), "num_to": t.get("num_to")}
         interval = max(5, int(t.get("interval", 10)))
         screen_type = (t.get("screen_type") or "").strip()
         date_key = t.get("date", "")
@@ -179,18 +181,18 @@ class Watcher:
                     # 2번: 좌석표에 머물러 있으면(직전 '대기') 새로고침만으로 빠르게 재확인
                     if only_pref and self._parked:
                         ok, seat, msg = self.grabber.seatmap_recheck(
-                            self.grabber.page, need, preferred, only_pref, prefer)
+                            self.grabber.page, need, preferred, only_pref, prefer, region)
                         if msg == "NEED_FULL":
                             self._parked = False
                             ok, seat, msg = self.grabber.replay(
                                 self.recipe, day=date_key, hhmm=s.time, movie=mov_nm,
                                 persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer,
-                                log=rlog)
+                                log=rlog, region=region)
                     else:
                         ok, seat, msg = self.grabber.replay(
                             self.recipe, day=date_key, hhmm=s.time, movie=mov_nm,
                             persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer,
-                            log=rlog)
+                            log=rlog, region=region)
                     # 원하는 좌석 대기 상태면 좌석표에 머무른 것 → 다음엔 빠른 재확인
                     self._parked = bool(only_pref and (not ok) and ("대기중" in (msg or "")))
                 except Exception as e:  # noqa: BLE001

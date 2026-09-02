@@ -56,6 +56,8 @@ class EventWatcher:
         preferred = b.get("preferred") or []
         only = bool(b.get("only_preferred"))
         prefer = b.get("prefer", "center")
+        self._region = {"row_from": b.get("row_from", ""), "row_to": b.get("row_to", ""),
+                        "num_from": b.get("num_from"), "num_to": b.get("num_to")}
         interval = max(10, int(b.get("interval", 30)))
         dates = [(date.today() + timedelta(days=i)).strftime("%Y%m%d") for i in range(self.days)]
 
@@ -139,7 +141,8 @@ class EventWatcher:
                                     self.recipe, day=disp, hhmm=s.time, movie=mov_nm,
                                     persons=persons, preferred=preferred,
                                     only_preferred=only, prefer=prefer,
-                                    log=lambda mm: log(f"[{self.tag}] · {mm}"))
+                                    log=lambda mm: log(f"[{self.tag}] · {mm}"),
+                                    region=getattr(self, "_region", None))
                             except Exception as e:  # noqa: BLE001
                                 ok, seat, msg = False, "", f"좌석잡기 오류: {e}"
                             if ok:

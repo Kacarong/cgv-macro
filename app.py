@@ -27,7 +27,7 @@ PANEL = "#1B1B1F"
 BG = "#0F0F10"
 SUB = "#9A9AA2"
 
-VERSION = "v79"
+VERSION = "v80"
 CONFIG = os.path.join(paths.data_dir(), "app_config.json")
 RECIPE = os.path.join(paths.data_dir(), "recipe.json")
 STATE_JSON = os.path.join(paths.data_dir(), "cgv_state.json")   # 로그인 세션(창 공유용)
@@ -123,6 +123,18 @@ class App(ctk.CTk):
         ns["pos"] = self._dd(srow, ["center", "front", "back", "any"], 90); ns["pos"].pack(side="left")
         ctk.CTkLabel(srow, text="주기(초)", text_color=SUB).pack(side="left", padx=(10, 3))
         ns["int"] = self._dd(srow, ["5", "10", "15", "30", "60"], 70); ns["int"].set("10"); ns["int"].pack(side="left")
+
+        # 구역 지정(선택): 열(A~) 범위 + 번호 범위 안에서만 자동으로 붙여 잡음
+        rrow = ctk.CTkFrame(pc, fg_color=PANEL); rrow.pack(fill="x", padx=16, pady=(0, 12))
+        ctk.CTkLabel(rrow, text="구역(선택) 열", text_color=SUB).pack(side="left", padx=(6, 3))
+        ns["rf"] = ctk.CTkEntry(rrow, placeholder_text="A", width=46, fg_color="#2A2A30"); ns["rf"].pack(side="left")
+        ctk.CTkLabel(rrow, text="~", text_color=SUB).pack(side="left", padx=3)
+        ns["rt"] = ctk.CTkEntry(rrow, placeholder_text="H", width=46, fg_color="#2A2A30"); ns["rt"].pack(side="left")
+        ctk.CTkLabel(rrow, text="번호", text_color=SUB).pack(side="left", padx=(12, 3))
+        ns["nf"] = ctk.CTkEntry(rrow, placeholder_text="10", width=52, fg_color="#2A2A30"); ns["nf"].pack(side="left")
+        ctk.CTkLabel(rrow, text="~", text_color=SUB).pack(side="left", padx=3)
+        ns["nt"] = ctk.CTkEntry(rrow, placeholder_text="20", width=52, fg_color="#2A2A30"); ns["nt"].pack(side="left")
+        ctk.CTkLabel(rrow, text="(비우면 제한 없음 · 예: 열 C~G, 번호 10~20)", text_color=SUB).pack(side="left", padx=8)
 
     def _target_panel(self, parent):
         """영화/극장/날짜/상영관/회차 + 인원·좌석. ns dict 반환(메뉴 갱신용으로 self.panels 등록)."""
@@ -509,12 +521,19 @@ class App(ctk.CTk):
 
     # ---------- 설정 읽기/저장 ----------
     def _read_ps(self, ns) -> dict:
+        def _num(w):
+            v = "".join(ch for ch in w.get() if ch.isdigit())
+            return int(v) if v else None
         return {
             "persons": {"일반": int(ns["gen"].get()), "청소년": int(ns["teen"].get()), "우대": int(ns["pref"].get())},
             "preferred": [s.strip() for s in ns["seats"].get().split(",") if s.strip()],
             "only_preferred": bool(ns["only"].get()),
             "prefer": ns["pos"].get(),
             "interval": int(ns["int"].get()),
+            "row_from": ns["rf"].get().strip().upper() if "rf" in ns else "",
+            "row_to": ns["rt"].get().strip().upper() if "rt" in ns else "",
+            "num_from": _num(ns["nf"]) if "nf" in ns else None,
+            "num_to": _num(ns["nt"]) if "nt" in ns else None,
         }
 
     def _read_target(self, ns, mode) -> dict:

@@ -111,6 +111,26 @@ EXTEND_CONFIRM_JS = r"""()=>{
 }"""
 
 
+def _label_in_region(lb: str, region: dict) -> bool:
+    """좌석 라벨('C35')이 지정 구역(열/번호 범위) 안인지."""
+    m = re.match(r"^([A-Z]{1,2})(\d+)$", (lb or "").strip().upper())
+    if not m:
+        return False
+    r, num = m.group(1), int(m.group(2))
+    rf = (region.get("row_from") or "").strip().upper()
+    rt = (region.get("row_to") or "").strip().upper()
+    nf, nt = region.get("num_from"), region.get("num_to")
+    if rf and r < rf:
+        return False
+    if rt and r > rt:
+        return False
+    if nf is not None and num < nf:
+        return False
+    if nt is not None and num > nt:
+        return False
+    return True
+
+
 def _classify(step: dict) -> str:
     cls = step.get("cls", "") or ""
     txt = (step.get("txt") or "").strip()
@@ -314,7 +334,8 @@ class Grabber:
     def replay(self, recipe: dict, day: str, hhmm: str, movie: str = "",
                persons: dict | None = None, preferred: list[str] | None = None,
                only_preferred: bool = False, prefer: str = "center",
-               page=None, log=None, deadline_s: int = 120) -> tuple[bool, str, str]:
+               page=None, log=None, deadline_s: int = 120,
+               region: dict | None = None) -> tuple[bool, str, str]:
         persons = {k: int(v) for k, v in (persons or {"일반": 2}).items() if int(v) > 0}
         total = sum(persons.values()) or 1
         preferred = [s.strip().upper() for s in (preferred or [])]
@@ -481,7 +502,7 @@ class Grabber:
 
                 elif kind == "seat":
                     if not done["seat"]:
-                        ok, seat_str, msg = self._pick_seats(p, total, prefer, preferred, only_preferred)
+                        ok, seat_str, msg = self._pick_seats(p, total, prefer, preferred, only_preferred, region)
                         if not ok:
                             _lg(f"좌석 대기: {msg}")
                             return False, "", msg
@@ -668,7 +689,7 @@ class Grabber:
             return False
 
     def seatmap_recheck(self, page, need: int, preferred: list[str], only_preferred: bool,
-                        prefer: str) -> tuple[bool, str, str]:
+                        prefer: str, region: dict | None = None) -> tuple[bool, str, str]:
         """좌석표에 머무른 채 새로고침해 좌석만 빠르게 재확인(취소표 효율화, 2번).
         좌석표가 아니면 'NEED_FULL' 반환 → 호출부에서 전체 재생으로 폴백."""
         try:
@@ -680,7 +701,7 @@ class Grabber:
                 return False, "", "NEED_FULL"
             ok, seat_str, msg = self._pick_seats(page, need, prefer,
                                                  [s.strip().upper() for s in (preferred or [])],
-                                                 only_preferred)
+                                                 only_preferred, region)
             if not ok:
                 return False, "", msg   # '원하는 좌석 대기중' 등 — 좌석표 유지
             self._do_payment(page)
@@ -689,13 +710,30 @@ class Grabber:
             return False, "", "NEED_FULL"
 
     @staticmethod
-    def _auto_pick(remaining: list, need: int, prefer: str) -> list:
-        """자동 좌석 선택: 같은 열 '붙어있는 need석' 우선 + 열 우선순위(center/front/back).
-        remaining: [(label, idx)]. 좌석 라벨은 'A16' 형태(열문자+번호)."""
+    def _auto_pick(remaining: list, need: int, prefer: str, region: dict | None = None) -> list:
+        """자동 좌석 선택: 지정 구역(열/번호 범위) 안에서 같은 열 '붙어있는 need석' 우선
+        + 열 우선순위(center/front/back). remaining: [(label, idx)]. 라벨은 'A16'(열문자+번호)."""
+        region = region or {}
+        rf = (region.get("row_from") or "").strip().upper()
+        rt = (region.get("row_to") or "").strip().upper()
+        nf = region.get("num_from")
+        nt = region.get("num_to")
+
+        def in_region(r, num):
+            if rf and r < rf:
+                return False
+            if rt and r > rt:
+                return False
+            if nf is not None and num < nf:
+                return False
+            if nt is not None and num > nt:
+                return False
+            return True
+
         parsed = []
         for lb, idx in remaining:
             m = re.match(r"^([A-Z]{1,2})(\d+)$", lb)
-            if m:
+            if m and in_region(m.group(1), int(m.group(2))):
                 parsed.append((m.group(1), int(m.group(2)), idx))
         rows = sorted({r for r, _, _ in parsed})
 
@@ -736,8 +774,9 @@ class Grabber:
             picked = [idx for _, _, idx in parsed[:need]]
         else:
             picked = []
-        # 3) 라벨 파싱 안 되는 좌석까지 포함해 부족분 채움
-        if len(picked) < need:
+        # 3) 라벨 파싱 안 되는 좌석까지 포함해 부족분 채움(단, 구역 지정이 없을 때만)
+        region_set = bool(rf or rt or nf is not None or nt is not None)
+        if len(picked) < need and not region_set:
             for _lb, idx in remaining:
                 if idx not in picked:
                     picked.append(idx)
@@ -792,8 +831,11 @@ class Grabber:
         return False
 
     def _pick_seats(self, page, total: int, prefer: str, preferred: list[str],
-                    only_preferred: bool) -> tuple[bool, str, str]:
+                    only_preferred: bool, region: dict | None = None) -> tuple[bool, str, str]:
         p = page
+        region = region or {}
+        region_set = bool((region.get("row_from") or region.get("row_to")
+                           or region.get("num_from") is not None or region.get("num_to") is not None))
         labels = self._seat_labels(p)
         logger.info("[replay] 빈 좌석 %d개 (필요 %d)", len(labels), total)
         if not labels:
@@ -811,9 +853,13 @@ class Grabber:
                 return False, "", f"원하는 좌석 대기중(가능:{','.join(targets) or '없음'}/필요 {total})"
         if len(targets) < total:
             remaining = [(lb, i) for i, lb in enumerate(labels) if lb not in targets]
-            for idx in self._auto_pick(remaining, total - len(targets), prefer):
+            for idx in self._auto_pick(remaining, total - len(targets), prefer, region):
                 if 0 <= idx < len(labels) and labels[idx] not in targets:
                     targets.append(labels[idx])
+        # 구역을 지정했는데 그 구역에 앉을 자리가 부족하면 → 잡지 않고 대기(구역 밖 좌석 방지)
+        if region_set and len(targets) < total:
+            self._shot(p, "seat")
+            return False, "", f"원하는 구역 대기중(현재 {len(targets)}/{total}석 · 구역 밖은 안 잡음)"
         # 중복 라벨 제거
         seen = set(); uniq = []
         for lb in targets:
@@ -828,9 +874,13 @@ class Grabber:
                 picked.append(lb)
                 p.wait_for_timeout(250)
             elif not only_preferred:
-                # 그 좌석이 사라졌으면 다른 빈자리로 대체
+                # 그 좌석이 사라졌으면 다른 빈자리로 대체(구역 지정 시 구역 안에서만)
                 for alt in self._seat_labels(p):
-                    if alt not in picked and self._click_seat_by_label(p, alt):
+                    if alt in picked:
+                        continue
+                    if region_set and not _label_in_region(alt, region):
+                        continue
+                    if self._click_seat_by_label(p, alt):
                         picked.append(alt); p.wait_for_timeout(250); break
         picked = [x for x in dict.fromkeys(picked) if x]   # 중복/빈값 제거
         if not picked:
