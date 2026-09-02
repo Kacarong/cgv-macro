@@ -53,18 +53,20 @@ CLICK_TEXT_JS = r"""(a)=>{
   return 'ok:'+norm(el.textContent).slice(0,18);
 }"""
 
-# 화면에서 '결제하기'가 든 보이는 버튼 중 '가장 아래' 것을 data-pay 로 표식(실제 클릭은 Playwright)
+# '결제하기' 버튼을 data-pay 로 표식(실제 클릭은 Playwright).
+# '결제 전 확인' 모달이 열려 있으면 그 모달 안의 결제하기를 우선 선택(배경 버튼 오클릭 방지).
 MARK_PAY_JS = r"""()=>{
-  const btns=[...document.querySelectorAll('button,a,div')].filter(e=>{
-    const t=(e.textContent||'').replace(/\s+/g,'');
-    if(!t.includes('결제하기')) return false;
-    const r=e.getBoundingClientRect();
-    return r.width>60 && r.height>10 && e.offsetParent!==null;});
+  const norm=s=>(s||'').replace(/\s+/g,'');
+  const vis=e=>{const r=e.getBoundingClientRect();return r.width>60&&r.height>10&&e.offsetParent!==null;};
+  let btns=[...document.querySelectorAll('button,a')].filter(e=>norm(e.textContent).includes('결제하기')&&vis(e));
+  if(!btns.length) btns=[...document.querySelectorAll('button,a,div')].filter(e=>norm(e.textContent).includes('결제하기')&&vis(e));
   if(!btns.length) return null;
-  btns.sort((a,b)=>b.getBoundingClientRect().top-a.getBoundingClientRect().top);
+  const inModal=btns.filter(b=>{let p=b;for(let i=0;i<12&&p;i++){if((p.textContent||'').includes('결제 전 확인'))return true;p=p.parentElement;}return false;});
+  const pool=inModal.length?inModal:btns;
+  pool.sort((a,b)=>b.getBoundingClientRect().top-a.getBoundingClientRect().top);
   document.querySelectorAll('[data-pay]').forEach(e=>e.removeAttribute('data-pay'));
-  btns[0].setAttribute('data-pay','1');
-  return Math.round(btns[0].getBoundingClientRect().top);
+  pool[0].setAttribute('data-pay','1');
+  return Math.round(pool[0].getBoundingClientRect().top);
 }"""
 
 MARK_SHOW_JS = r"""(a)=>{const {hhmm,movie}=a;
@@ -502,18 +504,18 @@ class Grabber:
             if _confirm_open() or _pay_page():
                 break
             _click_pay(40)
-            for _ in range(40):   # 최대 ~6s 대기
+            for _ in range(50):   # 최대 ~7.5s 대기
                 if _confirm_open() or _pay_page():
                     break
                 p.wait_for_timeout(150)
-        # 2) '결제 전 확인' 모달의 결제하기 → 결제 페이지 (모달 사라질 때까지)
+        # 2) '결제 전 확인' 모달의 결제하기 → 결제 페이지 (모달 사라질 때까지, 로딩 넉넉히)
         for _attempt in range(8):
             if _pay_page() or not _confirm_open():
                 break
-            p.wait_for_timeout(300)
+            p.wait_for_timeout(400)
             _click_pay(20)
-            for _ in range(40):
-                if _pay_page() or not _confirm_open():
+            for _ in range(70):   # 최대 ~10.5s 대기(결제수단 페이지 로딩 지연 대비)
+                if _pay_page() or _left_seat() or not _confirm_open():
                     break
                 p.wait_for_timeout(150)
         self._shot(p, "payment")
