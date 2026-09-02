@@ -460,6 +460,148 @@ class Grabber:
             logger.info("[replay] 인원 %s %d명 → %s", label, n, r)
             p.wait_for_timeout(300)
 
+    def _do_payment(self, page) -> bool:
+        """좌석 선택 후 '결제하기' → '결제 전 확인' 모달까지 진행(결제수단 페이지 도달).
+        replay 의 결제 로직과 동일하나 별도 메서드(빠른 재확인 경로에서 재사용). True=결제 페이지."""
+        p = page
+
+        def _pay_page() -> bool:
+            return bool(p.locator("text=결제수단").count() or p.locator("text=간편결제").count()
+                        or p.locator("text=신용/체크카드").count()
+                        or p.locator("text=포인트/쿠폰").count() or "/payment" in p.url.lower())
+
+        def _confirm_open() -> bool:
+            return bool(p.locator("text=결제 전 확인").count())
+
+        def _click_pay(tries: int) -> bool:
+            top = None
+            for _ in range(tries):
+                top = p.evaluate(MARK_PAY_JS)
+                if top is not None:
+                    break
+                p.wait_for_timeout(120)
+            if top is None:
+                return False
+            loc = p.locator("[data-pay='1']").first
+            try:
+                loc.scroll_into_view_if_needed(timeout=2000)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                loc.click(timeout=3000)
+            except Exception:  # noqa: BLE001
+                try:
+                    loc.click(force=True, timeout=2000)
+                except Exception:  # noqa: BLE001
+                    pass
+            return True
+
+        for attempt in range(3):
+            if _confirm_open() or _pay_page():
+                break
+            _click_pay(40)
+            for _ in range(30):
+                if _confirm_open() or _pay_page():
+                    break
+                p.wait_for_timeout(120)
+        for attempt in range(4):
+            if _pay_page() or not _confirm_open():
+                break
+            p.wait_for_timeout(350)
+            _click_pay(15)
+            for _ in range(30):
+                if _pay_page() or not _confirm_open():
+                    break
+                p.wait_for_timeout(120)
+        self._shot(p, "payment")
+        return _pay_page()
+
+    def _on_seatmap(self, page) -> bool:
+        try:
+            if "selectVisitorCnt" not in (page.url or ""):
+                return False
+            return page.locator("button[class*='seatMap_seatNumber']").count() > 0
+        except Exception:  # noqa: BLE001
+            return False
+
+    def seatmap_recheck(self, page, need: int, preferred: list[str], only_preferred: bool,
+                        prefer: str) -> tuple[bool, str, str]:
+        """좌석표에 머무른 채 새로고침해 좌석만 빠르게 재확인(취소표 효율화, 2번).
+        좌석표가 아니면 'NEED_FULL' 반환 → 호출부에서 전체 재생으로 폴백."""
+        try:
+            if not self._on_seatmap(page):
+                return False, "", "NEED_FULL"
+            page.reload(wait_until="domcontentloaded")
+            page.wait_for_timeout(1200)
+            if not self._on_seatmap(page):
+                return False, "", "NEED_FULL"
+            ok, seat_str, msg = self._pick_seats(page, need, prefer,
+                                                 [s.strip().upper() for s in (preferred or [])],
+                                                 only_preferred)
+            if not ok:
+                return False, "", msg   # '원하는 좌석 대기중' 등 — 좌석표 유지
+            self._do_payment(page)
+            return True, seat_str, "좌석 선점 완료(결제 페이지, 빠른재확인)."
+        except Exception as e:  # noqa: BLE001
+            return False, "", "NEED_FULL"
+
+    @staticmethod
+    def _auto_pick(remaining: list, need: int, prefer: str) -> list:
+        """자동 좌석 선택: 같은 열 '붙어있는 need석' 우선 + 열 우선순위(center/front/back).
+        remaining: [(label, idx)]. 좌석 라벨은 'A16' 형태(열문자+번호)."""
+        parsed = []
+        for lb, idx in remaining:
+            m = re.match(r"^([A-Z]{1,2})(\d+)$", lb)
+            if m:
+                parsed.append((m.group(1), int(m.group(2)), idx))
+        rows = sorted({r for r, _, _ in parsed})
+
+        def row_rank(r):
+            if not rows:
+                return 0
+            i = rows.index(r); n = len(rows)
+            if prefer == "front":
+                return i
+            if prefer == "back":
+                return n - 1 - i
+            if prefer == "any":
+                return 0
+            return abs(i - (n - 1) / 2)   # center
+
+        # 1) 붙어있는 need석(같은 열, 연속 번호) 블록 우선
+        if need >= 2 and parsed:
+            by_row: dict = {}
+            for r, num, idx in parsed:
+                by_row.setdefault(r, []).append((num, idx))
+            best = None
+            for r, sl in by_row.items():
+                sl.sort()
+                for k in range(len(sl) - need + 1):
+                    win = sl[k:k + need]
+                    if win[-1][0] - win[0][0] == need - 1:   # 연속 번호
+                        rowmid = (sl[0][0] + sl[-1][0]) / 2
+                        blockmid = (win[0][0] + win[-1][0]) / 2
+                        score = (row_rank(r), abs(blockmid - rowmid))
+                        if best is None or score < best[0]:
+                            best = (score, [i for _, i in win])
+            if best:
+                return best[1]
+
+        # 2) 붙어있는 블록이 없으면 열 우선순위대로 개별 선택
+        if parsed:
+            parsed.sort(key=lambda t: (row_rank(t[0]), t[1]))
+            picked = [idx for _, _, idx in parsed[:need]]
+        else:
+            picked = []
+        # 3) 라벨 파싱 안 되는 좌석까지 포함해 부족분 채움
+        if len(picked) < need:
+            for _lb, idx in remaining:
+                if idx not in picked:
+                    picked.append(idx)
+                if len(picked) >= need:
+                    break
+        return picked[:need]
+
     def _pick_seats(self, page, total: int, prefer: str, preferred: list[str],
                     only_preferred: bool) -> tuple[bool, str, str]:
         p = page
@@ -484,13 +626,9 @@ class Grabber:
                 self._shot(p, "seat")
                 return False, "", f"원하는 좌석 대기중(가능:{','.join(got) or '없음'}/필요 {total})"
         if len(chosen) < total:
-            pool = [idx for _, idx in labels if idx not in chosen]
-            if prefer == "back":
-                pool = list(reversed(pool))
-            elif prefer == "center":
-                mid = len(pool) // 2
-                pool = sorted(pool, key=lambda x: abs(pool.index(x) - mid))
-            chosen.extend(pool[: total - len(chosen)])
+            need = total - len(chosen)
+            remaining = [(lb, idx) for lb, idx in labels if idx not in chosen]
+            chosen.extend(self._auto_pick(remaining, need, prefer))
         chosen = chosen[:total]
 
         picked = []

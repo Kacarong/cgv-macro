@@ -13,6 +13,7 @@ import json
 import os
 import queue
 import threading
+import time
 
 import customtkinter as ctk
 
@@ -268,11 +269,32 @@ class App(ctk.CTk):
         self.e_ment = ctk.CTkEntry(drow, placeholder_text="멘션 ID", width=140, fg_color="#2A2A30")
         self.e_ment.pack(side="left")
 
+        rl = self._card(sett, "자동 재로그인 (세션 만료 시 · 선택 · 기본 꺼짐)")
+        rrow = ctk.CTkFrame(rl, fg_color=PANEL); rrow.pack(fill="x", padx=16, pady=(4, 4))
+        self.sw_relogin = ctk.CTkSwitch(rrow, text="자동 재로그인 켜기", progress_color=RED)
+        self.sw_relogin.pack(side="left")
+        rrow2 = ctk.CTkFrame(rl, fg_color=PANEL); rrow2.pack(fill="x", padx=16, pady=(0, 4))
+        self.e_cid = ctk.CTkEntry(rrow2, placeholder_text="CGV(CJ ONE) 아이디", width=200, fg_color="#2A2A30")
+        self.e_cid.pack(side="left", padx=(0, 6))
+        self.e_cpw = ctk.CTkEntry(rrow2, placeholder_text="비밀번호", show="●", width=180, fg_color="#2A2A30")
+        self.e_cpw.pack(side="left")
+        rrow3 = ctk.CTkFrame(rl, fg_color=PANEL); rrow3.pack(fill="x", padx=16, pady=(0, 8))
+        self.e_2cap = ctk.CTkEntry(rrow3, placeholder_text="2Captcha API 키 (있으면 캡챠 자동해석)", width=390, fg_color="#2A2A30")
+        self.e_2cap.pack(side="left")
+        ctk.CTkLabel(rl, text="아이디/비번은 이 PC(%APPDATA%)에 저장됩니다. 캡챠는 2Captcha 키가 있어야 자동해석돼요"
+                             "(없으면 만료 시 '로그인 필요' 알림만).", text_color=SUB, wraplength=740,
+                     justify="left").pack(anchor="w", padx=16, pady=(0, 12))
+
         oc = self._card(sett, "기타")
-        orow = ctk.CTkFrame(oc, fg_color=PANEL); orow.pack(fill="x", padx=16, pady=(4, 12))
-        ctk.CTkButton(orow, text="중복 예매 기록 초기화", fg_color="#33333A", hover_color="#44444C",
+        orow = ctk.CTkFrame(oc, fg_color=PANEL); orow.pack(fill="x", padx=16, pady=(4, 4))
+        ctk.CTkButton(orow, text="설정 내보내기", fg_color="#33333A", hover_color="#44444C",
+                      command=self._export_config).pack(side="left")
+        ctk.CTkButton(orow, text="설정 불러오기", fg_color="#33333A", hover_color="#44444C",
+                      command=self._import_config).pack(side="left", padx=8)
+        orow2 = ctk.CTkFrame(oc, fg_color=PANEL); orow2.pack(fill="x", padx=16, pady=(0, 12))
+        ctk.CTkButton(orow2, text="중복 예매 기록 초기화", fg_color="#33333A", hover_color="#44444C",
                       command=self._clear_grabbed).pack(side="left")
-        ctk.CTkLabel(orow, text="(이미 잡은 회차를 다시 잡게 하려면 초기화)", text_color=SUB).pack(side="left", padx=10)
+        ctk.CTkLabel(orow2, text="(이미 잡은 회차를 다시 잡게 하려면 초기화)", text_color=SUB).pack(side="left", padx=10)
 
         self._note(sett, "사용 순서: (1) '① 로그인 준비'로 크롬에서 1회 로그인(캡챠 포함) → 세션 저장·닫힘. (2) 각 탭에서 대상 추가.\n"
                          "(3) '② 감시 시작' → 대상마다 '독립 크롬 창'이 열려 진짜 병렬로 감시(로그인 공유, 재로그인 없음).\n"
@@ -352,6 +374,53 @@ class App(ctk.CTk):
         self.grabbed_keys = set()
         _save_grabbed(self.grabbed_keys)
         self._put("중복 예매 기록 초기화됨.")
+
+    # ---------- 설정 내보내기/불러오기(프리셋) ----------
+    def _current_cfg(self) -> dict:
+        return {
+            "cancel": self.cancel_list, "open": self.open_list,
+            "event_theaters": self.event_theaters, "days": int(self.dd_days.get()),
+            "webhook": self.e_hook.get().strip(), "mention": self.e_ment.get().strip(),
+            "auto_relogin": bool(self.sw_relogin.get()) if hasattr(self, "sw_relogin") else False,
+            "cgv_id": self.e_cid.get().strip() if hasattr(self, "e_cid") else "",
+            "cgv_pw": self.e_cpw.get() if hasattr(self, "e_cpw") else "",
+            "twocaptcha": self.e_2cap.get().strip() if hasattr(self, "e_2cap") else "",
+        }
+
+    def _export_config(self):
+        try:
+            from tkinter import filedialog
+            path = filedialog.asksaveasfilename(defaultextension=".json",
+                                                filetypes=[("설정 파일", "*.json")],
+                                                initialfile="cgv_preset.json")
+            if not path:
+                return
+            json.dump(self._current_cfg(), open(path, "w", encoding="utf-8"),
+                      ensure_ascii=False, indent=2)
+            self._put(f"설정 내보냄: {path}")
+        except Exception as e:  # noqa: BLE001
+            self._put(f"내보내기 실패: {e}")
+
+    def _import_config(self):
+        try:
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(filetypes=[("설정 파일", "*.json")])
+            if not path:
+                return
+            c = json.load(open(path, encoding="utf-8"))
+            self.cancel_list = c.get("cancel", []) or []
+            self.open_list = c.get("open", []) or []
+            self.event_theaters = c.get("event_theaters", []) or []
+            self._refresh_target_list("취소표"); self._refresh_target_list("상영오픈")
+            self._refresh_event_theaters()
+            if c.get("days"):
+                self.dd_days.set(str(c.get("days")))
+            for entry, val in ((self.e_hook, c.get("webhook", "")), (self.e_ment, c.get("mention", ""))):
+                entry.delete(0, "end"); entry.insert(0, val or "")
+            self._save()
+            self._put(f"설정 불러옴: {path}")
+        except Exception as e:  # noqa: BLE001
+            self._put(f"불러오기 실패: {e}")
 
     def _on_seat_success(self, info):
         """워커 스레드에서 호출 — 중복키 영속화 + 메인스레드 알림 큐로 전달."""
@@ -443,11 +512,7 @@ class App(ctk.CTk):
         return t
 
     def _save(self):
-        save_cfg({
-            "cancel": self.cancel_list, "open": self.open_list,
-            "event_theaters": self.event_theaters, "days": int(self.dd_days.get()),
-            "webhook": self.e_hook.get().strip(), "mention": self.e_ment.get().strip(),
-        })
+        save_cfg(self._current_cfg())
         self._put("설정 저장됨.")
 
     def _load(self):
@@ -466,6 +531,14 @@ class App(ctk.CTk):
             self.e_hook.insert(0, c["webhook"])
         if c.get("mention"):
             self.e_ment.insert(0, c["mention"])
+        if c.get("auto_relogin"):
+            self.sw_relogin.select()
+        if c.get("cgv_id"):
+            self.e_cid.insert(0, c["cgv_id"])
+        if c.get("cgv_pw"):
+            self.e_cpw.insert(0, c["cgv_pw"])
+        if c.get("twocaptcha"):
+            self.e_2cap.insert(0, c["twocaptcha"])
 
     # ---------- 대상 목록(취소표/상영오픈) ----------
     def _list_for(self, mode):
@@ -583,46 +656,79 @@ class App(ctk.CTk):
 
         self._close_idle_workers()   # 이전에 남은 유휴 창 정리
 
+        relogin_cfg = {
+            "enabled": bool(self.sw_relogin.get()),
+            "cgv_id": self.e_cid.get().strip(),
+            "cgv_pw": self.e_cpw.get(),
+            "twocaptcha": self.e_2cap.get().strip(),
+        }
+
         def pos(i):
             return (30 + (i % 4) * 300 + (i // 4) * 40, 30 + (i % 3) * 200)
 
-        workers = []
+        # 대상마다 '팩토리'(새 워커 생성기)를 만든다 → 멈추면 그 창만 자동 재시작(7번)
+        factories = []
         i = 0
         for t in list(self.cancel_list):
-            workers.append(Watcher(recipe, t, notifier, storage_state=STATE_JSON, win_pos=pos(i),
-                                   tag=f"취소#{i+1} {t.get('movie','')[:6]}",
-                                   grabbed_keys=self.grabbed_keys, on_success=self._on_seat_success)); i += 1
+            factories.append((lambda t=t, i=i: Watcher(
+                recipe, t, notifier, storage_state=STATE_JSON, win_pos=pos(i),
+                tag=f"취소#{i+1} {t.get('movie','')[:6]}",
+                grabbed_keys=self.grabbed_keys, on_success=self._on_seat_success,
+                relogin_cfg=relogin_cfg))); i += 1
         for t in list(self.open_list):
-            workers.append(Watcher(recipe, t, notifier, storage_state=STATE_JSON, win_pos=pos(i),
-                                   tag=f"오픈#{i+1} {t.get('movie','')[:6]}",
-                                   grabbed_keys=self.grabbed_keys, on_success=self._on_seat_success)); i += 1
+            factories.append((lambda t=t, i=i: Watcher(
+                recipe, t, notifier, storage_state=STATE_JSON, win_pos=pos(i),
+                tag=f"오픈#{i+1} {t.get('movie','')[:6]}",
+                grabbed_keys=self.grabbed_keys, on_success=self._on_seat_success,
+                relogin_cfg=relogin_cfg))); i += 1
         if self.event_theaters:
             ths = [(self.theaters[nm][0], nm) for nm in self.event_theaters if nm in self.theaters]
             if ths:
                 base = self._read_ps(self.ns_event)
-                workers.append(EventWatcher(recipe, ths, base, notifier, days=int(self.dd_days.get()),
-                                            storage_state=STATE_JSON, win_pos=pos(i),
-                                            tag=f"무대인사#{i+1}", on_success=self._on_seat_success)); i += 1
-        if not workers:
+                factories.append((lambda i=i: EventWatcher(
+                    recipe, ths, base, notifier, days=int(self.dd_days.get()),
+                    storage_state=STATE_JSON, win_pos=pos(i),
+                    tag=f"무대인사#{i+1}", on_success=self._on_seat_success))); i += 1
+        if not factories:
             self._put("감시할 대상이 없습니다. 각 탭에서 대상/극장을 추가하세요."); return
 
         self._save()
         self.watch_stop.clear()
-        self.workers = workers
-        self._active = len(workers)
-        self._put(f"감시 시작 — 창 {len(workers)}개를 띄워 '동시에' 감시합니다(대상마다 1개, 로그인 공유).")
+        self.workers = [None] * len(factories)
+        self._active = len(factories)
+        self._put(f"감시 시작 — 창 {len(factories)}개를 띄워 '동시에' 감시합니다(대상마다 1개, 로그인 공유).")
 
-        for w in workers:
-            threading.Thread(target=self._run_worker, args=(w,), daemon=True).start()
+        for slot, fac in enumerate(factories):
+            threading.Thread(target=self._supervise, args=(slot, fac), daemon=True).start()
         self.b_start.configure(state="disabled")
         self.b_stop.configure(state="normal", fg_color=RED, hover_color=RED_DK)
-        self.stat.configure(text=f"● 감시 중 (창 {len(workers)})", text_color=GREEN)
+        self.stat.configure(text=f"● 감시 중 (창 {len(factories)})", text_color=GREEN)
 
-    def _run_worker(self, w):
+    def _supervise(self, slot, factory):
+        """한 대상의 창을 관리 — 비정상 종료(멈춤/크래시) 시 자동 재시작(최대 5회)."""
+        restarts = 0
         try:
-            w.run(self.watch_stop, log=self._put)
-        except Exception as e:  # noqa: BLE001
-            self._put(f"[감시] 오류: {e}")
+            while not self.watch_stop.is_set():
+                w = factory()
+                self.workers[slot] = w
+                try:
+                    w.run(self.watch_stop, log=self._put)
+                except Exception as e:  # noqa: BLE001
+                    self._put(f"[감시] 오류: {e}")
+                if self.watch_stop.is_set() or getattr(w, "held_payment", False):
+                    break
+                try:
+                    w.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                restarts += 1
+                if restarts > 5:
+                    self._put(f"[슬롯{slot+1}] 반복 실패 5회 — 이 창 감시 중단"); break
+                self._put(f"[슬롯{slot+1}] 창이 멈춰 재시작({restarts}/5)")
+                for _ in range(6):   # ~3초 대기(중지 반응)
+                    if self.watch_stop.is_set():
+                        break
+                    time.sleep(0.5)
         finally:
             self.after(0, self._worker_done)
 
@@ -634,6 +740,8 @@ class App(ctk.CTk):
     def _close_idle_workers(self):
         keep = []
         for w in self.workers:
+            if w is None:
+                continue
             if getattr(w, "held_payment", False):
                 keep.append(w)   # 결제 대기 창은 유지
             else:
@@ -660,6 +768,8 @@ class App(ctk.CTk):
     def _on_close(self):
         self.watch_stop.set(); self.rec_stop.set()
         for w in self.workers:
+            if w is None:
+                continue
             try:
                 w.close()
             except Exception:  # noqa: BLE001

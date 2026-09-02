@@ -42,7 +42,7 @@ class Watcher:
 
     def __init__(self, recipe: dict, target: dict, notifier=None,
                  storage_state: str | None = None, win_pos=None, tag: str = "감시",
-                 grabbed_keys: set | None = None, on_success=None) -> None:
+                 grabbed_keys: set | None = None, on_success=None, relogin_cfg=None) -> None:
         self.recipe = recipe
         self.t = target
         self.notifier = notifier
@@ -51,8 +51,42 @@ class Watcher:
         self.tag = tag
         self.grabbed_keys = grabbed_keys if grabbed_keys is not None else set()  # 중복 예매 방지(공유)
         self.on_success = on_success         # 성공 시 콜백(소리/팝업/영속화)
+        self.relogin_cfg = relogin_cfg or {}  # 자동 재로그인 설정(토글/아이디/비번/2captcha)
         self.grabber: Grabber | None = None
         self.held_payment = False   # 좌석 선점(결제창 도달) 여부
+        self._relogin_notified = False
+        self._parked = False        # 좌석표에 머무는 중(빠른 재확인 경로)
+
+    def _ensure_logged_in(self, log, allow_manual=True) -> bool:
+        """로그인 상태 확인. 풀렸으면 자동 재로그인(켜져 있으면) 시도, 아니면 수동 대기."""
+        try:
+            if self.grabber.quick_login_check():
+                return True
+        except Exception:  # noqa: BLE001
+            return True   # 판단 불가 시 진행
+        cfg = self.relogin_cfg
+        if cfg.get("enabled") and cfg.get("cgv_id") and cfg.get("cgv_pw"):
+            from .relogin import attempt_relogin
+            log(f"[{self.tag}] 세션 만료 감지 → 자동 재로그인 시도")
+            if attempt_relogin(self.grabber.page, cfg.get("cgv_id", ""), cfg.get("cgv_pw", ""),
+                               cfg.get("twocaptcha", ""), log=log):
+                self._relogin_notified = False
+                return True
+        if not self._relogin_notified:
+            self._relogin_notified = True
+            log(f"[{self.tag}] ⚠️ 로그인 필요 — '① 로그인 준비'로 다시 로그인하세요")
+            if self.notifier:
+                try:
+                    self.notifier.notify_info("🔑 CGV 로그인 필요",
+                                              "세션이 만료됐어요. '① 로그인 준비'로 다시 로그인하거나 자동 재로그인을 켜세요.")
+                except Exception:  # noqa: BLE001
+                    pass
+        if allow_manual:
+            try:
+                return self.grabber.ensure_login(timeout_s=600)
+            except Exception:  # noqa: BLE001
+                return False
+        return False
 
     def run(self, stop_event, log=None) -> None:
         log = log or logger.info
@@ -96,8 +130,8 @@ class Watcher:
             self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema", wait_until="domcontentloaded")
         except Exception:  # noqa: BLE001
             pass
-        if not self.grabber.ensure_login(timeout_s=600):
-            log(f"[{tag}] 로그인 안 됨 — 이 창에서 로그인하거나 '로그인 준비'를 다시 하세요")
+        if not self._ensure_logged_in(log):
+            log(f"[{tag}] 로그인 안 됨 — 중지")
             return
         log(f"[{tag}] 로그인 확인 → 감시 시작")
 
@@ -129,11 +163,24 @@ class Watcher:
                 s = cands[0]
                 log(f"[{tag}] 예매가능 감지: {s.time} {s.screen} 잔여{s.remaining} → 좌석 잡기 시도")
                 try:
-                    ok, seat, msg = self.grabber.replay(
-                        self.recipe, day=date_key, hhmm=s.time, movie=mov_nm,
-                        persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer)
+                    # 2번: 좌석표에 머물러 있으면(직전 '대기') 새로고침만으로 빠르게 재확인
+                    if only_pref and self._parked:
+                        ok, seat, msg = self.grabber.seatmap_recheck(
+                            self.grabber.page, need, preferred, only_pref, prefer)
+                        if msg == "NEED_FULL":
+                            self._parked = False
+                            ok, seat, msg = self.grabber.replay(
+                                self.recipe, day=date_key, hhmm=s.time, movie=mov_nm,
+                                persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer)
+                    else:
+                        ok, seat, msg = self.grabber.replay(
+                            self.recipe, day=date_key, hhmm=s.time, movie=mov_nm,
+                            persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer)
+                    # 원하는 좌석 대기 상태면 좌석표에 머무른 것 → 다음엔 빠른 재확인
+                    self._parked = bool(only_pref and (not ok) and ("대기중" in (msg or "")))
                 except Exception as e:  # noqa: BLE001
                     ok, seat, msg = False, "", f"좌석잡기 오류: {e}"
+                    self._parked = False
                 if ok:
                     self.held_payment = True
                     self.grabbed_keys.add(dup_key)
@@ -158,9 +205,10 @@ class Watcher:
                 else:
                     log(f"[{tag}] 미완료: {msg}")
             else:
-                # 예매가능 회차 없음 — 조용히 대기(로그 도배 방지). 가끔 세션 유지용 새로고침.
+                # 예매가능 회차 없음 — 조용히 대기. 가끔 세션 점검(keep-alive + 만료 시 재로그인).
                 idle_ticks += 1
                 if idle_ticks % 12 == 0:
+                    self._ensure_logged_in(log, allow_manual=False)
                     try:
                         self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema",
                                                wait_until="domcontentloaded")
