@@ -408,53 +408,56 @@ class Grabber:
                         if got:
                             break
                         p.wait_for_timeout(300)
-                    if got:
+                    def _click_date():
                         loc = p.locator("[data-day='1']").first
                         try:
                             loc.scroll_into_view_if_needed(timeout=2000)
                         except Exception:  # noqa: BLE001
                             pass
-                        # 실제 마우스 좌표 클릭(정확한 날짜 요소를 확실히 선택)
-                        clicked = False
-                        try:
-                            box = loc.bounding_box()
-                            if box and box["height"] > 0:
-                                p.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-                                clicked = True
-                        except Exception:  # noqa: BLE001
-                            pass
-                        if not clicked:
-                            for how in ("normal", "force", "js"):
-                                try:
-                                    if how == "normal":
-                                        loc.click(timeout=3000)
-                                    elif how == "force":
-                                        loc.click(force=True, timeout=2000)
-                                    else:
-                                        loc.evaluate("e=>e.click()")
-                                    break
-                                except Exception:  # noqa: BLE001
-                                    continue
-                        p.wait_for_timeout(1200)
-                        sel = None
-                        try:
-                            sel = p.evaluate(verify_date_js)
-                        except Exception:  # noqa: BLE001
-                            pass
-                        if sel and str(int(sel)) != day_num:
-                            _lg(f"⚠️ 날짜 {day_num}일 클릭했는데 {int(sel)}일이 선택됨 — 재시도")
-                            # 목표 숫자 재표식 후 다시 클릭
+                        for how in ("normal", "force", "js", "mouse"):
                             try:
-                                p.evaluate(mark_date_js, day_num)
-                                loc2 = p.locator("[data-day='1']").first
-                                box2 = loc2.bounding_box()
-                                if box2:
-                                    p.mouse.click(box2["x"] + box2["width"] / 2, box2["y"] + box2["height"] / 2)
-                                p.wait_for_timeout(1000)
+                                if how == "normal":
+                                    loc.click(timeout=3500)
+                                elif how == "force":
+                                    loc.click(force=True, timeout=2500)
+                                elif how == "js":
+                                    loc.evaluate("e=>e.click()")
+                                else:
+                                    box = loc.bounding_box()
+                                    if not box:
+                                        continue
+                                    p.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                                return True
+                            except Exception:  # noqa: BLE001
+                                continue
+                        return False
+
+                    if got:
+                        sel = None
+                        for attempt in range(4):
+                            _click_date()
+                            p.wait_for_timeout(1100)
+                            try:
                                 sel = p.evaluate(verify_date_js)
                             except Exception:  # noqa: BLE001
-                                pass
-                        _lg(f"날짜 {day_num}일 선택 (달력 표시: {int(sel) if sel else '?'}일)")
+                                sel = None
+                            if sel and str(int(sel)) == day_num:
+                                break
+                            p.evaluate(mark_date_js, day_num)   # 재표식 후 재시도
+                        if not (sel and str(int(sel)) == day_num):
+                            try:
+                                dd = p.evaluate(r"""()=>{const out=[];const seen=new Set();
+                                  for(const e of document.querySelectorAll("[class*='dayScroll']")){
+                                    const t=(e.textContent||'').replace(/\s+/g,'').slice(0,4);
+                                    if(!/\d/.test(t)||seen.has(t))continue;seen.add(t);
+                                    const cs=((e.className||'')+'').split(' ').filter(c=>c.toLowerCase().includes('day')).join('.').slice(0,46);
+                                    out.push(t+'<'+e.tagName+'.'+cs+'>');if(out.length>=8)break;}
+                                  return out.join('  ');}""")
+                            except Exception:  # noqa: BLE001
+                                dd = ""
+                            _lg(f"⚠️ 날짜 {day_num}일 선택 실패(달력표시 {int(sel) if sel else '?'}일) — 구조: {dd[:260]}")
+                        else:
+                            _lg(f"날짜 {day_num}일 선택 (달력 표시: {int(sel)}일)")
                     else:
                         _lg(f"날짜 {day_num}일 못 찾음(달력 로딩 지연?)")
                     p.wait_for_timeout(1300)
@@ -938,5 +941,17 @@ class Grabber:
                 dump = ""
             self._shot(p, "seat")
             return False, "", f"좌석 선택 안 됨(선택완료 비활성) — 진단: {dump[:300]}"
-        # st == 'enabled' 또는 None(버튼 못찾음) → 진행
+        # st == 'enabled' 또는 None(버튼 못찾음) → 진행. '실제로 선택된' 좌석을 알림에 표시.
+        try:
+            actual = p.evaluate(r"""()=>{const out=[];
+              for(const e of document.querySelectorAll("[class*='seatNumber']")){
+                const c=((e.className||'')+'').toLowerCase();
+                const ap=((e.getAttribute('aria-pressed')||e.getAttribute('aria-selected')||'')+'').toLowerCase();
+                if(c.includes('select')||c.includes('active')||c.includes('choose')||ap==='true'){
+                  const t=(e.textContent||'').trim().toUpperCase(); if(/^[A-Z]{1,2}\d{1,3}$/.test(t))out.push(t);}}
+              return [...new Set(out)];}""") or []
+        except Exception:  # noqa: BLE001
+            actual = []
+        if actual:
+            picked = actual
         return True, ", ".join(picked), "ok"
