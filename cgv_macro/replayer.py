@@ -30,7 +30,10 @@ RECIPE = os.path.join(paths.data_dir(), "recipe.json")
 LOGIN_URL = "https://cgv.co.kr/mem/login?returnUrl=%2Fcnm%2FmovieBook%2Fcinema"
 CINEMA_URL = "https://cgv.co.kr/cnm/movieBook/cinema"
 
-SEL_SEAT_OK = "button[class*='seatMap_seatNumber']:not([class*='seatDisabled'])"
+# CGV는 관마다 좌석표 구현이 다르다: 예전 'seatMap_seatNumber'(button)와 신형 'seatMainMap_seatNumber'(span).
+# 둘 다(그리고 태그 무관) 잡도록 'seatNumber' 클래스로 매칭하고, 판매완료/장애인석류는 제외.
+SEL_SEAT_OK = ("[class*='seatNumber']:not([class*='disable' i]):not([class*='reserv' i])"
+               ":not([class*='sold' i]):not([class*='complete' i])")
 _SEAT_RE = re.compile(r"^[A-Z]{1,2}\d{1,3}$")
 
 # 텍스트로 '보이는' 요소를 찾아 클릭 (정확일치 우선 → 부분일치, 버튼/링크 우선)
@@ -387,7 +390,9 @@ class Grabber:
                         .filter(e=>{const t=(e.textContent||'').replace(/[^0-9]/g,'');return t!==''&&parseInt(t,10)===target&&vis(e);});
                       if(!cands.length) return null;
                       cands.sort((a,b)=>(a.textContent||'').replace(/\s+/g,'').length-(b.textContent||'').replace(/\s+/g,'').length);
-                      cands[0].setAttribute('data-day','1');
+                      // 클릭은 '숫자 스팬'이 아니라 클릭 가능한 날짜 항목(조상)에 — 스팬 클릭이 안 먹는 관 대응
+                      const item=cands[0].closest("[class*='dayScroll_scrollItem'],[class*='dayScroll_item'],li,button,a")||cands[0];
+                      item.setAttribute('data-day','1');
                       return (cands[0].textContent||'').replace(/[^0-9]/g,'');
                     }"""
                     verify_date_js = r"""()=>{
