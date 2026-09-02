@@ -131,15 +131,13 @@ class Watcher:
         except Exception as e:  # noqa: BLE001
             log(f"[{tag}] 크롬 실행 실패: {e}")
             return
-        # 저장된 세션이면 이미 로그인 상태 → 예매 페이지로 이동해 확인/대기(창이 보이게)
+        # 감시(자리 확인)는 로그인 불필요(API). 창은 예매 페이지만 띄워두고 바로 감시 시작.
+        # 로그인은 '좌석 잡을 때'만 필요하므로, 시작 시엔 로그인 확인/이동을 하지 않는다.
         try:
             self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema", wait_until="domcontentloaded")
         except Exception:  # noqa: BLE001
             pass
-        if not self._ensure_logged_in(log):
-            log(f"[{tag}] 로그인 안 됨 — 중지")
-            return
-        log(f"[{tag}] 로그인 확인 → 감시 시작")
+        log(f"[{tag}] 감시 시작 (로그인은 예매 시점에만 확인)")
 
         idle_ticks = 0
         backoff = 0
@@ -210,6 +208,10 @@ class Watcher:
                     break   # 이 창은 결제창으로 남기고 이 대상 감시 종료
                 else:
                     log(f"[{tag}] 미완료: {msg}")
+                    # 로그인/대기열 문제로 실패했을 때만 로그인 확인/복구(자동 또는 수동 대기)
+                    if any(w in (msg or "") for w in ("로그인", "전환 안", "대기열")):
+                        self._parked = False
+                        self._ensure_logged_in(log)
             else:
                 # 예매가능 회차 없음 — 조용히 대기. 가끔 keep-alive(단, 로그인 화면이면 절대 안 건드림).
                 idle_ticks += 1

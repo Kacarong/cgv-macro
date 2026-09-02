@@ -76,10 +76,7 @@ class EventWatcher:
             self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema", wait_until="domcontentloaded")
         except Exception:  # noqa: BLE001
             pass
-        if not self.grabber.ensure_login(timeout_s=600):
-            log(f"[{self.tag}] 로그인 안 됨 — 중지")
-            return
-        log(f"[{self.tag}] 로그인 확인 → 감시 시작")
+        log(f"[{self.tag}] 감지 시작 (로그인은 예매 시점에만 확인)")
 
         while not stop_event.is_set() and not self._held():
             try:
