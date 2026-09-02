@@ -396,66 +396,10 @@ class Grabber:
                         if done.get("pay"):
                             continue
                         done["pay"] = True
-                        # 좌석요약 결제하기 → '결제 전 확인' 모달 결제하기 → 결제수단 페이지.
-                        def _pay_page() -> bool:
-                            return bool(p.locator("text=결제수단").count() or p.locator("text=간편결제").count()
-                                        or p.locator("text=신용/체크카드").count()
-                                        or p.locator("text=포인트/쿠폰").count()
-                                        or "/payment" in p.url.lower())
-
-                        def _confirm_open() -> bool:
-                            return bool(p.locator("text=결제 전 확인").count())
-
-                        def _click_pay(tag: str, tries: int) -> bool:
-                            top = None
-                            for _ in range(tries):
-                                top = p.evaluate(MARK_PAY_JS)
-                                if top is not None:
-                                    break
-                                p.wait_for_timeout(120)
-                            if top is None:
-                                return False
-                            loc = p.locator("[data-pay='1']").first
-                            try:
-                                loc.scroll_into_view_if_needed(timeout=2000)
-                            except Exception:  # noqa: BLE001
-                                pass
-                            try:
-                                loc.click(timeout=3000)          # 정상 클릭(핸들러 확실히 발동)
-                            except Exception:  # noqa: BLE001
-                                try:
-                                    loc.click(force=True, timeout=2000)
-                                except Exception:  # noqa: BLE001
-                                    pass
-                            logger.info("[replay] 결제하기 %s @top%s", tag, top)
-                            return True
-
-                        # 1번: 좌석요약의 결제하기 → 확인 모달이 뜰 때까지 필요시 재시도
-                        for attempt in range(3):
-                            if _confirm_open() or _pay_page():
-                                break
-                            _click_pay(f"1.{attempt}", 40)
-                            for _ in range(30):  # 최대 ~3.6s 모달 대기
-                                if _confirm_open() or _pay_page():
-                                    break
-                                p.wait_for_timeout(120)
-                        # 2번: '결제 전 확인' 모달의 결제하기를 '모달이 사라질 때까지' 재시도.
-                        # (모달이 있을 때만 누르므로 결제수단 페이지 최종 결제버튼은 절대 안 눌림)
-                        for attempt in range(4):
-                            if _pay_page() or not _confirm_open():
-                                break
-                            p.wait_for_timeout(350)  # 모달 안정화
-                            _click_pay(f"2.{attempt}", 15)
-                            for _ in range(30):
-                                if _pay_page() or not _confirm_open():
-                                    break
-                                p.wait_for_timeout(120)
-                        self._shot(p, "payment")
-                        reached = _pay_page()
-                        logger.info("[replay] 결제 진행 결과: 결제수단페이지=%s", reached)
+                        reached = self._do_payment(p)
+                        logger.info("[replay] 결제 진행 결과: 결제페이지=%s", reached)
                         if reached:
                             return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
-                        # 좌석은 선택됐지만 '결제하기'로 결제 페이지 진입 실패 → 창에서 직접 눌러야 함
                         return True, seat_str, "좌석 선택됨 — '결제하기'가 안 눌려 결제페이지 미도달. 창에서 직접 결제하기를 눌러 확인하세요"
                     r = p.evaluate(CLICK_TEXT_JS, {"txt": txt, "cls": step.get("cls", "")})
                     logger.info("[replay] 클릭 '%s' → %s", txt[:14], r)
@@ -485,22 +429,51 @@ class Grabber:
             p.wait_for_timeout(300)
 
     def _do_payment(self, page) -> bool:
-        """좌석 선택 후 '결제하기' → '결제 전 확인' 모달까지 진행(결제수단 페이지 도달).
-        replay 의 결제 로직과 동일하나 별도 메서드(빠른 재확인 경로에서 재사용). True=결제 페이지."""
+        """좌석 선택 후 '결제하기'(좌석요약) → '결제 전 확인' 모달 결제하기 → 결제 페이지 도달.
+        끈질기게 재시도하고, 결제 페이지 도달을 넓게 판정한다. True=결제 페이지 도달.
+        (결제수단 페이지의 '최종 결제'는 모달이 있을 때만 누르므로 절대 누르지 않는다.)"""
         p = page
+        start_url = ""
+        try:
+            start_url = p.url or ""
+        except Exception:  # noqa: BLE001
+            pass
+
+        def _left_seat() -> bool:
+            try:
+                u = p.url or ""
+            except Exception:  # noqa: BLE001
+                return False
+            return ("selectVisitorCnt" not in u) and (u != start_url) and bool(u)
 
         def _pay_page() -> bool:
-            return bool(p.locator("text=결제수단").count() or p.locator("text=간편결제").count()
-                        or p.locator("text=신용/체크카드").count()
-                        or p.locator("text=포인트/쿠폰").count() or "/payment" in p.url.lower())
+            try:
+                u = (p.url or "").lower()
+            except Exception:  # noqa: BLE001
+                u = ""
+            if any(k in u for k in ("/payment", "/order", "/pay", "paymethod")):
+                return True
+            for t in ("결제수단", "간편결제", "신용/체크카드", "포인트/쿠폰", "결제 정보", "최종 결제금액", "일반결제"):
+                try:
+                    if p.locator(f"text={t}").count():
+                        return True
+                except Exception:  # noqa: BLE001
+                    pass
+            return False
 
         def _confirm_open() -> bool:
-            return bool(p.locator("text=결제 전 확인").count())
+            try:
+                return bool(p.locator("text=결제 전 확인").count())
+            except Exception:  # noqa: BLE001
+                return False
 
         def _click_pay(tries: int) -> bool:
             top = None
             for _ in range(tries):
-                top = p.evaluate(MARK_PAY_JS)
+                try:
+                    top = p.evaluate(MARK_PAY_JS)
+                except Exception:  # noqa: BLE001
+                    top = None
                 if top is not None:
                     break
                 p.wait_for_timeout(120)
@@ -511,34 +484,43 @@ class Grabber:
                 loc.scroll_into_view_if_needed(timeout=2000)
             except Exception:  # noqa: BLE001
                 pass
-            try:
-                loc.click(timeout=3000)
-            except Exception:  # noqa: BLE001
+            for how in ("normal", "force", "js"):
                 try:
-                    loc.click(force=True, timeout=2000)
+                    if how == "normal":
+                        loc.click(timeout=3000)
+                    elif how == "force":
+                        loc.click(force=True, timeout=2000)
+                    else:
+                        loc.evaluate("e=>e.click()")
+                    return True
                 except Exception:  # noqa: BLE001
-                    pass
-            return True
+                    continue
+            return False
 
-        for attempt in range(3):
+        # 1) 좌석요약 '결제하기' → 확인 모달 또는 결제 페이지 (끈질기게)
+        for _attempt in range(6):
             if _confirm_open() or _pay_page():
                 break
             _click_pay(40)
-            for _ in range(30):
+            for _ in range(40):   # 최대 ~6s 대기
                 if _confirm_open() or _pay_page():
                     break
-                p.wait_for_timeout(120)
-        for attempt in range(4):
+                p.wait_for_timeout(150)
+        # 2) '결제 전 확인' 모달의 결제하기 → 결제 페이지 (모달 사라질 때까지)
+        for _attempt in range(8):
             if _pay_page() or not _confirm_open():
                 break
-            p.wait_for_timeout(350)
-            _click_pay(15)
-            for _ in range(30):
+            p.wait_for_timeout(300)
+            _click_pay(20)
+            for _ in range(40):
                 if _pay_page() or not _confirm_open():
                     break
-                p.wait_for_timeout(120)
+                p.wait_for_timeout(150)
         self._shot(p, "payment")
-        return _pay_page()
+        if _pay_page():
+            return True
+        # 좌석선택 화면을 벗어났고 확인모달도 없으면 결제 단계로 넘어간 것으로 간주
+        return _left_seat() and not _confirm_open()
 
     def _on_seatmap(self, page) -> bool:
         try:
