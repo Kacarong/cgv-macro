@@ -897,26 +897,41 @@ class Grabber:
             self._shot(p, "seat")
             return False, "", "좌석 클릭 실패 — 계속 감시"
 
-        # 실제 '선택됨' 검증(선택 좌석은 클래스에 select 표시). 감지되면 부족분 재클릭.
-        def _sel_labels():
+        # '선택완료' 버튼 활성화 여부로 좌석 선택 성공을 판정(가장 신뢰). null=버튼 없음.
+        def _complete_state():
             try:
-                return p.evaluate(r"""()=>{const out=[];
-                  for(const b of document.querySelectorAll("button[class*='seatMap_seatNumber']")){
-                    const c=((b.className||'')+'').toLowerCase();
-                    const ap=((b.getAttribute('aria-pressed')||b.getAttribute('aria-selected')||'')+'').toLowerCase();
-                    if(c.includes('select')||ap==='true') out.push((b.textContent||'').trim().toUpperCase());}
-                  return out;}""") or []
+                return p.evaluate(r"""()=>{
+                  const b=[...document.querySelectorAll('button,a,div[role=button]')].find(e=>{
+                    const t=(e.textContent||'').replace(/\s+/g,''); return t.includes('선택완료')&&e.offsetParent!==null;});
+                  if(!b) return null;
+                  const c=((b.className||'')+'').toLowerCase();
+                  const dis=b.disabled||b.getAttribute('aria-disabled')==='true'||c.includes('disabled')||c.includes('inactive');
+                  return dis?'disabled':'enabled';}""")
             except Exception:  # noqa: BLE001
-                return []
-        sel = _sel_labels()
-        if sel:   # 선택 마커 감지 가능한 경우에만 엄격 검증(감지 불가 시 기존 동작 유지)
-            if len(sel) < total:
-                for lb in list(dict.fromkeys(picked + targets)):
-                    if lb not in sel and self._click_seat_by_label(p, lb):
-                        p.wait_for_timeout(250)
-                sel = _sel_labels()
-            if len(sel) < total:
-                self._shot(p, "seat")
-                return False, "", f"좌석 선택 확인 실패({len(sel)}/{total}석) — 재시도"
-            picked = sel[:total]
+                return None
+        st = _complete_state()
+        if st == "disabled":
+            # 선택이 안 된 것 → 목표 좌석 재클릭 후 재확인
+            for lb in list(dict.fromkeys(picked + targets)):
+                self._click_seat_by_label(p, lb)
+                p.wait_for_timeout(250)
+                if _complete_state() == "enabled":
+                    break
+            st = _complete_state()
+        if st == "disabled":
+            # 진단: 그 관 좌석표 구조를 로그로(선택자 교정용)
+            try:
+                dump = p.evaluate(r"""()=>{const seen=new Set();const out=[];
+                  for(const e of document.querySelectorAll("[class*='seat']")){
+                    const t=(e.textContent||'').trim();
+                    if(!/^[A-Z]{1,2}\d{1,3}$/.test(t)||seen.has(t))continue;seen.add(t);
+                    const cs=((e.className||'')+'').split(' ').filter(c=>c.toLowerCase().includes('seat')).join('.').slice(0,44);
+                    out.push(t+'<'+e.tagName+'.'+cs+(e.disabled?':dis':'')+'>');
+                    if(out.length>=10)break;}
+                  return out.join('  ');}""")
+            except Exception:  # noqa: BLE001
+                dump = ""
+            self._shot(p, "seat")
+            return False, "", f"좌석 선택 안 됨(선택완료 비활성) — 진단: {dump[:300]}"
+        # st == 'enabled' 또는 None(버튼 못찾음) → 진행
         return True, ", ".join(picked), "ok"
