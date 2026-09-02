@@ -314,15 +314,24 @@ class Grabber:
     def replay(self, recipe: dict, day: str, hhmm: str, movie: str = "",
                persons: dict | None = None, preferred: list[str] | None = None,
                only_preferred: bool = False, prefer: str = "center",
-               page=None) -> tuple[bool, str, str]:
+               page=None, log=None, deadline_s: int = 120) -> tuple[bool, str, str]:
         persons = {k: int(v) for k, v in (persons or {"일반": 2}).items() if int(v) > 0}
         total = sum(persons.values()) or 1
         preferred = [s.strip().upper() for s in (preferred or [])]
         p = page or self.page
+        deadline = time.time() + deadline_s
+
+        def _lg(msg):   # 진행 상황을 앱 로그로도 실시간 표시
+            logger.info("[replay] %s", msg)
+            if log:
+                try:
+                    log(msg)
+                except Exception:  # noqa: BLE001
+                    pass
+
         m = re.findall(r"\d+", day or "")
         day_num = str(int(m[-1])) if m else ""
-        logger.info("[replay] 대상 날짜=%s(일=%s) 시간=%s 영화=%s",
-                    day, day_num or "(없음)", hhmm, movie)
+        _lg(f"예매 진입 시작 (날짜 {day_num}일 / 회차 {hhmm} / 좌석 {total}석)")
         if not day_num:
             return False, "", "날짜가 비어있습니다. 날짜를 YYYY-MM-DD 로 입력하세요."
 
@@ -337,6 +346,9 @@ class Grabber:
             except Exception:  # noqa: BLE001
                 pass
             for i, step in enumerate(recipe.get("steps", [])):
+                if time.time() > deadline:
+                    self._shot(p, "timeout")
+                    return False, "", "시간초과 — 이번엔 못 잡음(다음 감지 때 재시도)"
                 kind = _classify(step)
                 txt = (step.get("txt") or "").strip()
                 # 날짜/회차/인원/좌석은 여러 번 기록됐어도 한 번만 처리
@@ -369,9 +381,9 @@ class Grabber:
                                 loc.click(force=True, timeout=3000)
                             except Exception:  # noqa: BLE001
                                 pass
-                        logger.info("[replay] 날짜 클릭: %s일", got)
+                        _lg(f"날짜 {got}일 선택")
                     else:
-                        logger.info("[replay] 날짜 %s일 못 찾음(달력에 안 보임?)", day_num)
+                        _lg(f"날짜 {day_num}일 못 찾음(달력에 안 보임?)")
                     p.wait_for_timeout(1500)
 
                 elif kind == "showtime":
@@ -390,10 +402,10 @@ class Grabber:
                             except Exception:  # noqa: BLE001
                                 pass
                         p.wait_for_timeout(300)
-                    logger.info("[replay] 회차 표식: %s", r)
                     if not str(r).startswith("ok"):
                         self._shot(p, "showtime")
                         return False, "", f"회차 {hhmm} 못 찾음 — 그 날 그 시간 회차가 실제로 있는지 확인하세요"
+                    _lg(f"회차 {hhmm} 선택 → 예매 진입")
                     loc = p.locator("[data-ap='1']").first
                     try:
                         loc.scroll_into_view_if_needed(timeout=2000)
@@ -411,20 +423,23 @@ class Grabber:
                         if not self._wait_visitor(p, 6000):
                             self._shot(p, "showtime")
                             return False, "", "회차 클릭했으나 예매(인원)로 전환 안 됨 — 로그인/대기열 확인"
-                    logger.info("[replay] 예매(인원) 진입 OK")
+                    _lg("인원/좌석 화면 진입")
 
                 elif kind == "person":
                     if not done["person"]:
                         self._pick_persons(p, persons)
                         done["person"] = True
+                        _lg("인원 선택 완료")
                     # 이후 중복 person 스텝은 건너뜀
 
                 elif kind == "seat":
                     if not done["seat"]:
                         ok, seat_str, msg = self._pick_seats(p, total, prefer, preferred, only_preferred)
                         if not ok:
+                            _lg(f"좌석 대기: {msg}")
                             return False, "", msg
                         done["seat"] = True
+                        _lg(f"좌석 선택: {seat_str} → 결제 진행")
 
                 else:  # literal — 기록된 텍스트 그대로 클릭
                     if not txt:
@@ -433,8 +448,9 @@ class Grabber:
                         if done.get("pay"):
                             continue
                         done["pay"] = True
-                        reached = self._do_payment(p)
-                        logger.info("[replay] 결제 진행 결과: 결제페이지=%s", reached)
+                        _lg("결제하기 클릭 진행…")
+                        reached = self._do_payment(p, deadline=deadline)
+                        _lg("결제 페이지 도달 ✓" if reached else "결제 페이지 미도달(수동 결제하기 필요)")
                         if reached:
                             return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
                         return True, seat_str, "좌석 선택됨 — '결제하기'가 안 눌려 결제페이지 미도달. 창에서 직접 결제하기를 눌러 확인하세요"
@@ -465,7 +481,7 @@ class Grabber:
             logger.info("[replay] 인원 %s %d명 → %s", label, n, r)
             p.wait_for_timeout(300)
 
-    def _do_payment(self, page) -> bool:
+    def _do_payment(self, page, deadline: float | None = None) -> bool:
         """좌석 선택 후 '결제하기'(좌석요약) → '결제 전 확인' 모달 결제하기 → 결제 페이지 도달.
         끈질기게 재시도하고, 결제 페이지 도달을 넓게 판정한다. True=결제 페이지 도달.
         (결제수단 페이지의 '최종 결제'는 모달이 있을 때만 누르므로 절대 누르지 않는다.)"""
@@ -541,8 +557,13 @@ class Grabber:
             except Exception:  # noqa: BLE001
                 pass
 
+        def _over():
+            return deadline is not None and time.time() > deadline
+
         # 1) 좌석요약 '결제하기' → 확인 모달 또는 결제 페이지 (끈질기게)
         for _attempt in range(6):
+            if _over():
+                break
             _clear_extend()
             if _confirm_open() or _pay_page():
                 break
@@ -554,6 +575,8 @@ class Grabber:
                 p.wait_for_timeout(150)
         # 2) '결제 전 확인' 모달의 결제하기 → 결제 페이지 (모달 사라질 때까지, 로딩 넉넉히)
         for _attempt in range(8):
+            if _over():
+                break
             _clear_extend()
             if _pay_page() or not _confirm_open():
                 break

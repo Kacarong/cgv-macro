@@ -138,7 +138,8 @@ class EventWatcher:
                                 ok, seat, msg = self.grabber.replay(
                                     self.recipe, day=disp, hhmm=s.time, movie=mov_nm,
                                     persons=persons, preferred=preferred,
-                                    only_preferred=only, prefer=prefer)
+                                    only_preferred=only, prefer=prefer,
+                                    log=lambda mm: log(f"[{self.tag}] · {mm}"))
                             except Exception as e:  # noqa: BLE001
                                 ok, seat, msg = False, "", f"좌석잡기 오류: {e}"
                             if ok:

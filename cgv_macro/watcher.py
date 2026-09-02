@@ -174,6 +174,7 @@ class Watcher:
             if cands:
                 s = cands[0]
                 log(f"[{tag}] 예매가능 감지: {s.time} {s.screen} 잔여{s.remaining} → 좌석 잡기 시도")
+                rlog = lambda mm: log(f"[{tag}] · {mm}")
                 try:
                     # 2번: 좌석표에 머물러 있으면(직전 '대기') 새로고침만으로 빠르게 재확인
                     if only_pref and self._parked:
@@ -183,11 +184,13 @@ class Watcher:
                             self._parked = False
                             ok, seat, msg = self.grabber.replay(
                                 self.recipe, day=date_key, hhmm=s.time, movie=mov_nm,
-                                persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer)
+                                persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer,
+                                log=rlog)
                     else:
                         ok, seat, msg = self.grabber.replay(
                             self.recipe, day=date_key, hhmm=s.time, movie=mov_nm,
-                            persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer)
+                            persons=persons, preferred=preferred, only_preferred=only_pref, prefer=prefer,
+                            log=rlog)
                     # 원하는 좌석 대기 상태면 좌석표에 머무른 것 → 다음엔 빠른 재확인
                     self._parked = bool(only_pref and (not ok) and ("대기중" in (msg or "")))
                 except Exception as e:  # noqa: BLE001
