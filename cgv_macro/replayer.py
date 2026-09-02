@@ -357,16 +357,25 @@ class Grabber:
 
                 if kind == "date":
                     done["date"] = True
-                    # 보이는 날짜 항목 중 '숫자가 정확히 그 날'인 것을 표식 → 실제 클릭
+                    # 날짜 '숫자만' 든 요소(리프) 중 정확히 그 날을 표식 → 실제 클릭
                     mark_date_js = r"""(dd)=>{
-                      const items=[...document.querySelectorAll("[class*='dayScroll_scrollItem']")].filter(e=>{
-                        const r=e.getBoundingClientRect(); return r.width>0&&r.height>0&&e.offsetParent!==null;});
-                      const dig=s=>(s||'').replace(/[^0-9]/g,'');
+                      const target=parseInt(dd,10);
+                      const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&e.offsetParent!==null;};
                       document.querySelectorAll('[data-day]').forEach(e=>e.removeAttribute('data-day'));
-                      const el=items.find(e=>parseInt(dig(e.textContent),10)===parseInt(dd,10));
-                      if(!el) return null; el.setAttribute('data-day','1'); return dig(el.textContent);
+                      let cands=[...document.querySelectorAll("[class*='dayScroll_number'],[class*='dayScroll_scrollItem'] span,[class*='dayScroll_scrollItem']")]
+                        .filter(e=>{const t=(e.textContent||'').replace(/[^0-9]/g,'');return t!==''&&parseInt(t,10)===target&&vis(e);});
+                      if(!cands.length) return null;
+                      cands.sort((a,b)=>(a.textContent||'').replace(/\s+/g,'').length-(b.textContent||'').replace(/\s+/g,'').length);
+                      cands[0].setAttribute('data-day','1');
+                      return (cands[0].textContent||'').replace(/[^0-9]/g,'');
                     }"""
-                    # 창이 막 떠서 달력이 아직 안 그려졌을 수 있으니 뜰 때까지 최대 ~8초 폴링
+                    verify_date_js = r"""()=>{
+                      const all=[...document.querySelectorAll("[class*='dayScroll']")];
+                      const sel=all.find(e=>{const c=((e.className||'')+'');const t=(e.textContent||'').replace(/[^0-9]/g,'');
+                        return t!==''&&(c.includes('c-red')||c.includes('active')||c.includes('selected')||e.getAttribute('aria-selected')==='true');});
+                      return sel?(sel.textContent||'').replace(/[^0-9]/g,''):null;
+                    }"""
+                    # 달력이 아직 안 그려졌을 수 있으니 뜰 때까지 최대 ~8초 폴링
                     got = None
                     for _ in range(27):
                         got = p.evaluate(mark_date_js, day_num)
@@ -379,17 +388,50 @@ class Grabber:
                             loc.scroll_into_view_if_needed(timeout=2000)
                         except Exception:  # noqa: BLE001
                             pass
+                        # 실제 마우스 좌표 클릭(정확한 날짜 요소를 확실히 선택)
+                        clicked = False
                         try:
-                            loc.click(timeout=4000)
+                            box = loc.bounding_box()
+                            if box and box["height"] > 0:
+                                p.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                                clicked = True
                         except Exception:  # noqa: BLE001
+                            pass
+                        if not clicked:
+                            for how in ("normal", "force", "js"):
+                                try:
+                                    if how == "normal":
+                                        loc.click(timeout=3000)
+                                    elif how == "force":
+                                        loc.click(force=True, timeout=2000)
+                                    else:
+                                        loc.evaluate("e=>e.click()")
+                                    break
+                                except Exception:  # noqa: BLE001
+                                    continue
+                        p.wait_for_timeout(1200)
+                        sel = None
+                        try:
+                            sel = p.evaluate(verify_date_js)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        if sel and str(int(sel)) != day_num:
+                            _lg(f"⚠️ 날짜 {day_num}일 클릭했는데 {int(sel)}일이 선택됨 — 재시도")
+                            # 목표 숫자 재표식 후 다시 클릭
                             try:
-                                loc.click(force=True, timeout=3000)
+                                p.evaluate(mark_date_js, day_num)
+                                loc2 = p.locator("[data-day='1']").first
+                                box2 = loc2.bounding_box()
+                                if box2:
+                                    p.mouse.click(box2["x"] + box2["width"] / 2, box2["y"] + box2["height"] / 2)
+                                p.wait_for_timeout(1000)
+                                sel = p.evaluate(verify_date_js)
                             except Exception:  # noqa: BLE001
                                 pass
-                        _lg(f"날짜 {got}일 선택")
+                        _lg(f"날짜 {day_num}일 선택 (달력 표시: {int(sel) if sel else '?'}일)")
                     else:
                         _lg(f"날짜 {day_num}일 못 찾음(달력 로딩 지연?)")
-                    p.wait_for_timeout(1500)
+                    p.wait_for_timeout(1300)
 
                 elif kind == "showtime":
                     done["showtime"] = True

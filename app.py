@@ -27,6 +27,7 @@ PANEL = "#1B1B1F"
 BG = "#0F0F10"
 SUB = "#9A9AA2"
 
+VERSION = "v78"
 CONFIG = os.path.join(paths.data_dir(), "app_config.json")
 RECIPE = os.path.join(paths.data_dir(), "recipe.json")
 STATE_JSON = os.path.join(paths.data_dir(), "cgv_state.json")   # 로그인 세션(창 공유용)
@@ -180,6 +181,8 @@ class App(ctk.CTk):
         ctk.CTkLabel(head, text="●", text_color=RED, font=ctk.CTkFont(size=22)).pack(side="left")
         ctk.CTkLabel(head, text="CGV Seat Watcher", text_color="white",
                      font=ctk.CTkFont(size=22, weight="bold")).pack(side="left", padx=6)
+        ctk.CTkLabel(head, text=VERSION, text_color=GREEN,
+                     font=ctk.CTkFont(size=13, weight="bold")).pack(side="left", padx=(0, 6))
         ctk.CTkLabel(head, text="취소표·오픈·무대인사 감지 → 좌석 자동 잡기", text_color=SUB,
                      font=ctk.CTkFont(size=12)).pack(side="left", padx=10)
 
