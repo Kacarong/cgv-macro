@@ -299,10 +299,14 @@ class App(ctk.CTk):
                       command=self._export_config).pack(side="left")
         ctk.CTkButton(orow, text="설정 불러오기", fg_color="#33333A", hover_color="#44444C",
                       command=self._import_config).pack(side="left", padx=8)
-        orow2 = ctk.CTkFrame(oc, fg_color=PANEL); orow2.pack(fill="x", padx=16, pady=(0, 12))
-        ctk.CTkButton(orow2, text="중복 예매 기록 초기화", fg_color="#33333A", hover_color="#44444C",
+        orow2 = ctk.CTkFrame(oc, fg_color=PANEL); orow2.pack(fill="x", padx=16, pady=(0, 4))
+        self.sw_dup = ctk.CTkSwitch(orow2, text="이미 잡은 회차 다시 안 잡기(중복 방지)", progress_color=RED)
+        self.sw_dup.pack(side="left")
+        orow3 = ctk.CTkFrame(oc, fg_color=PANEL); orow3.pack(fill="x", padx=16, pady=(0, 12))
+        ctk.CTkButton(orow3, text="중복 예매 기록 초기화", fg_color="#33333A", hover_color="#44444C",
                       command=self._clear_grabbed).pack(side="left")
-        ctk.CTkLabel(orow2, text="(이미 잡은 회차를 다시 잡게 하려면 초기화)", text_color=SUB).pack(side="left", padx=10)
+        ctk.CTkLabel(orow3, text="(중복 방지는 기본 꺼짐 — 켰을 때만 이미 잡은 회차를 건너뜀)",
+                     text_color=SUB).pack(side="left", padx=10)
 
         self._note(sett, "사용 순서: (1) '① 로그인 준비'로 크롬에서 1회 로그인(캡챠 포함) → 세션 저장·닫힘. (2) 각 탭에서 대상 추가.\n"
                          "(3) '② 감시 시작' → 대상마다 '독립 크롬 창'이 열려 진짜 병렬로 감시(로그인 공유, 재로그인 없음).\n"
@@ -391,6 +395,7 @@ class App(ctk.CTk):
             "webhook": self.e_hook.get().strip(), "mention": self.e_ment.get().strip(),
             "bot_token": self.e_bot.get().strip() if hasattr(self, "e_bot") else "",
             "user_id": self.e_uid.get().strip() if hasattr(self, "e_uid") else "",
+            "dup_prevent": bool(self.sw_dup.get()) if hasattr(self, "sw_dup") else False,
             "auto_relogin": bool(self.sw_relogin.get()) if hasattr(self, "sw_relogin") else False,
             "cgv_id": self.e_cid.get().strip() if hasattr(self, "e_cid") else "",
             "cgv_pw": self.e_cpw.get() if hasattr(self, "e_cpw") else "",
@@ -551,6 +556,8 @@ class App(ctk.CTk):
             self.e_bot.insert(0, c["bot_token"])
         if c.get("user_id"):
             self.e_uid.insert(0, c["user_id"])
+        if c.get("dup_prevent"):
+            self.sw_dup.select()
         if c.get("auto_relogin"):
             self.sw_relogin.select()
         if c.get("cgv_id"):
@@ -684,6 +691,7 @@ class App(ctk.CTk):
             "cgv_pw": self.e_cpw.get(),
             "twocaptcha": self.e_2cap.get().strip(),
         }
+        dup_prevent = bool(self.sw_dup.get())
 
         def pos(i):
             return (30 + (i % 4) * 300 + (i // 4) * 40, 30 + (i % 3) * 200)
@@ -696,13 +704,13 @@ class App(ctk.CTk):
                 recipe, t, notifier, storage_state=STATE_JSON, win_pos=pos(i),
                 tag=f"취소#{i+1} {t.get('movie','')[:6]}",
                 grabbed_keys=self.grabbed_keys, on_success=self._on_seat_success,
-                relogin_cfg=relogin_cfg))); i += 1
+                relogin_cfg=relogin_cfg, dup_prevent=dup_prevent))); i += 1
         for t in list(self.open_list):
             factories.append((lambda t=t, i=i: Watcher(
                 recipe, t, notifier, storage_state=STATE_JSON, win_pos=pos(i),
                 tag=f"오픈#{i+1} {t.get('movie','')[:6]}",
                 grabbed_keys=self.grabbed_keys, on_success=self._on_seat_success,
-                relogin_cfg=relogin_cfg))); i += 1
+                relogin_cfg=relogin_cfg, dup_prevent=dup_prevent))); i += 1
         if self.event_theaters:
             ths = [(self.theaters[nm][0], nm) for nm in self.event_theaters if nm in self.theaters]
             if ths:

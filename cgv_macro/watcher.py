@@ -42,7 +42,8 @@ class Watcher:
 
     def __init__(self, recipe: dict, target: dict, notifier=None,
                  storage_state: str | None = None, win_pos=None, tag: str = "감시",
-                 grabbed_keys: set | None = None, on_success=None, relogin_cfg=None) -> None:
+                 grabbed_keys: set | None = None, on_success=None, relogin_cfg=None,
+                 dup_prevent: bool = False) -> None:
         self.recipe = recipe
         self.t = target
         self.notifier = notifier
@@ -52,6 +53,7 @@ class Watcher:
         self.grabbed_keys = grabbed_keys if grabbed_keys is not None else set()  # 중복 예매 방지(공유)
         self.on_success = on_success         # 성공 시 콜백(소리/팝업/영속화)
         self.relogin_cfg = relogin_cfg or {}  # 자동 재로그인 설정(토글/아이디/비번/2captcha)
+        self.dup_prevent = dup_prevent        # 이미 잡은 회차 재선점 방지(기본 꺼짐)
         self.grabber: Grabber | None = None
         self.held_payment = False   # 좌석 선점(결제창 도달) 여부
         self._relogin_notified = False
@@ -121,8 +123,8 @@ class Watcher:
             f"{target_time or (tfrom+'~'+tto if (tfrom or tto) else '(전체 회차)')} / 좌석 {need}석 "
             f"{'/ 원하는좌석 '+','.join(preferred) if preferred else ''}")
 
-        if dup_key in self.grabbed_keys:
-            log(f"[{tag}] 이미 잡았던 회차라 건너뜀 — 다시 감시하려면 설정 탭 '중복 예매 기록 초기화'를 누르세요")
+        if self.dup_prevent and dup_key in self.grabbed_keys:
+            log(f"[{tag}] (중복 방지 ON) 이미 잡았던 회차라 건너뜀 — 설정에서 끄거나 '기록 초기화' 가능")
             return
 
         try:
