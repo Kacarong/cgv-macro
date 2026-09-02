@@ -122,7 +122,7 @@ class Watcher:
             f"{'/ 원하는좌석 '+','.join(preferred) if preferred else ''}")
 
         if dup_key in self.grabbed_keys:
-            log(f"[{tag}] 이미 예매한 회차 — 건너뜀(중복 예매 방지)")
+            log(f"[{tag}] 이미 잡았던 회차라 건너뜀 — 다시 감시하려면 설정 탭 '중복 예매 기록 초기화'를 누르세요")
             return
 
         try:
@@ -188,8 +188,9 @@ class Watcher:
                     self._parked = False
                 if ok:
                     self.held_payment = True
-                    self.grabbed_keys.add(dup_key)
                     reached = "결제 페이지" in (msg or "")
+                    if reached:
+                        self.grabbed_keys.add(dup_key)   # 결제 페이지 도달분만 중복기록(미도달은 재시도 허용)
                     log(f"[{tag}] ✅ 좌석 {'선점(결제페이지)' if reached else '선택(결제하기 미도달)'}: {seat} — {msg}")
                     shot = os.path.join(paths.data_dir(), f"grab_{_shot_prefix(tag)}payment.png")
                     if self.notifier:

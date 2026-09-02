@@ -727,26 +727,29 @@ class App(ctk.CTk):
         self.stat.configure(text=f"● 감시 중 (창 {len(factories)})", text_color=GREEN)
 
     def _supervise(self, slot, factory):
-        """한 대상의 창을 관리 — 비정상 종료(멈춤/크래시) 시 자동 재시작(최대 5회)."""
+        """한 대상의 창을 관리 — '크래시(예외)'일 때만 자동 재시작(최대 5회).
+        정상 종료(중복 건너뜀/좌석 선점/해석 실패 등)는 재시작하지 않는다."""
         restarts = 0
         try:
             while not self.watch_stop.is_set():
                 w = factory()
                 self.workers[slot] = w
+                crashed = False
                 try:
                     w.run(self.watch_stop, log=self._put)
                 except Exception as e:  # noqa: BLE001
                     self._put(f"[감시] 오류: {e}")
-                if self.watch_stop.is_set() or getattr(w, "held_payment", False):
-                    break
+                    crashed = True
+                if self.watch_stop.is_set() or getattr(w, "held_payment", False) or not crashed:
+                    break   # 중지/선점/정상종료 → 재시작 안 함
                 try:
                     w.close()
                 except Exception:  # noqa: BLE001
                     pass
                 restarts += 1
                 if restarts > 5:
-                    self._put(f"[슬롯{slot+1}] 반복 실패 5회 — 이 창 감시 중단"); break
-                self._put(f"[슬롯{slot+1}] 창이 멈춰 재시작({restarts}/5)")
+                    self._put(f"[슬롯{slot+1}] 반복 오류 5회 — 이 창 감시 중단"); break
+                self._put(f"[슬롯{slot+1}] 창이 오류로 멈춰 재시작({restarts}/5)")
                 for _ in range(6):   # ~3초 대기(중지 반응)
                     if self.watch_stop.is_set():
                         break
