@@ -798,7 +798,8 @@ class Grabber:
         return out
 
     def _click_seat_by_label(self, p, lb: str) -> bool:
-        """좌석표에서 라벨이 정확히 lb인 빈 좌석을 '지금' 찾아 클릭(위치 index 재사용 금지)."""
+        """좌석표에서 라벨이 정확히 lb인 빈 좌석을 '지금' 찾아 클릭(위치 index 재사용 금지).
+        화면 밖(가로 스크롤 필요) 좌석도 Playwright 정상 클릭이 자동 스크롤해서 확실히 누른다."""
         seats = p.locator(SEL_SEAT_OK)
         for i in range(seats.count()):
             el = seats.nth(i)
@@ -808,26 +809,35 @@ class Grabber:
             except Exception:  # noqa: BLE001
                 continue
             try:
-                el.scroll_into_view_if_needed(timeout=1500)
+                el.scroll_into_view_if_needed(timeout=2500)
             except Exception:  # noqa: BLE001
                 pass
+            # 1) Playwright 정상 클릭 — 좌석까지 자동 스크롤 + actionability 보장(가장 신뢰)
+            try:
+                el.click(timeout=4000)
+                return True
+            except Exception:  # noqa: BLE001
+                pass
+            # 2) 강제 클릭(오버레이가 막을 때)
+            try:
+                el.click(force=True, timeout=2500)
+                return True
+            except Exception:  # noqa: BLE001
+                pass
+            # 3) 좌표 클릭(스크롤 후 뷰포트 안일 때만)
             try:
                 box = el.bounding_box()
-                if box and box["height"] > 0:
+                if box and box["height"] > 0 and box["y"] >= 0 and box["x"] >= 0:
                     p.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
                     return True
             except Exception:  # noqa: BLE001
                 pass
-            for how in ("force", "js"):
-                try:
-                    if how == "force":
-                        el.click(force=True, timeout=3000)
-                    else:
-                        el.evaluate("e=>e.click()")
-                    return True
-                except Exception:  # noqa: BLE001
-                    continue
-            return False
+            # 4) JS 클릭
+            try:
+                el.evaluate("e=>e.click()")
+                return True
+            except Exception:  # noqa: BLE001
+                return False
         return False
 
     def _pick_seats(self, page, total: int, prefer: str, preferred: list[str],
