@@ -27,7 +27,7 @@ PANEL = "#1B1B1F"
 BG = "#0F0F10"
 SUB = "#9A9AA2"
 
-VERSION = "v80"
+VERSION = "v81"
 CONFIG = os.path.join(paths.data_dir(), "app_config.json")
 RECIPE = os.path.join(paths.data_dir(), "recipe.json")
 STATE_JSON = os.path.join(paths.data_dir(), "cgv_state.json")   # 로그인 세션(창 공유용)
@@ -632,9 +632,21 @@ class App(ctk.CTk):
         for i, t in enumerate(lst):
             row = ctk.CTkFrame(frame, fg_color="#1E1E22", corner_radius=8)
             row.pack(fill="x", padx=4, pady=3)
-            seats = (" · " + ",".join(t.get("preferred") or [])) if t.get("preferred") else ""
-            txt = f"{i+1}. {t['movie']} · {t['theater']} · {t['date']} · {t['time'] or '전체'}{seats}"
-            ctk.CTkLabel(row, text=txt, text_color="white").pack(side="left", padx=10, pady=6)
+            p = t.get("persons") or {}
+            ppl = "".join(f"{k[0]}{v}" for k, v in p.items() if int(v) > 0) or "일2"
+            extra = f" · {ppl}"
+            if t.get("preferred"):
+                extra += " · 좌석 " + ",".join(t["preferred"]) + ("만" if t.get("only_preferred") else "")
+            rf, rt = t.get("row_from") or "", t.get("row_to") or ""
+            nf, nt = t.get("num_from"), t.get("num_to")
+            if rf or rt or nf is not None or nt is not None:
+                extra += (f" · 구역 {rf or '?'}~{rt or '?'}열 "
+                          f"{nf if nf is not None else ''}~{nt if nt is not None else ''}번")
+            tw = t.get("time_from") or ""
+            tw2 = t.get("time_to") or ""
+            timelbl = t.get("time") or ((f"{tw}~{tw2}") if (tw or tw2) else "전체")
+            txt = f"{i+1}. {t['movie']} · {t['theater']} · {t['date']} · {timelbl}{extra}"
+            ctk.CTkLabel(row, text=txt, text_color="white", justify="left").pack(side="left", padx=10, pady=6)
             ctk.CTkButton(row, text="삭제", width=48, fg_color="#3A2A2A", hover_color=RED,
                           command=lambda idx=i: self._remove_target(mode, idx)).pack(side="right", padx=6)
 
