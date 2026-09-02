@@ -459,11 +459,15 @@ class App(ctk.CTk):
             self.after(1500, lambda: self.attributes("-topmost", False))
         except Exception:  # noqa: BLE001
             pass
-        self.stat.configure(text="● 좌석 선점! 결제하세요", text_color=RED)
+        reached = info.get("reached", True)
+        self.stat.configure(text="● 좌석 선점! 결제하세요" if reached else "● 좌석 선택됨! 결제하기 누르세요",
+                            text_color=RED)
+        tail = ("해당 크롬 창에서 결제하세요." if reached
+                else "해당 크롬 창에서 '결제하기'를 직접 눌러 결제페이지로 넘어간 뒤 결제하세요.")
         msg = (f"좌석을 잡았습니다!\n\n{info.get('movie','')} · {info.get('theater','')}\n"
-               f"{info.get('date','')} {info.get('time','')}  좌석 {info.get('seat','')}\n\n"
-               f"해당 크롬 창에서 결제하세요.")
-        self._put(f"🔔🔔 [{info.get('tag','')}] 좌석 선점! {info.get('seat','')} — 결제창에서 결제하세요")
+               f"{info.get('date','')} {info.get('time','')}  좌석 {info.get('seat','')}\n\n{tail}")
+        self._put(f"🔔🔔 [{info.get('tag','')}] 좌석 {'선점' if reached else '선택(결제하기 필요)'}! "
+                  f"{info.get('seat','')} — 크롬 창에서 결제하세요")
         try:
             from tkinter import messagebox
             messagebox.showinfo("CGV 좌석 선점 완료", msg)

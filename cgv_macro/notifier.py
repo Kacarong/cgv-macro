@@ -147,17 +147,22 @@ class DiscordNotifier:
             return self._post(payload)
 
     def notify_held_image(self, *, movie: str, theater: str, date: str, showtime: str,
-                          screen: str, seat_info: str, image_path: str = "") -> bool:
-        """좌석 선점 완료 — 멘션 + 결제 화면 스크린샷 첨부."""
+                          screen: str, seat_info: str, image_path: str = "",
+                          reached: bool = True) -> bool:
+        """좌석 선점 알림 — 멘션 + 결제 화면 스크린샷. reached=결제 페이지 도달 여부."""
+        title = ("🪑 좌석 선점 완료 — 결제만 하면 됩니다!" if reached
+                 else "🪑 좌석 선택됨 — 창에서 '결제하기'를 직접 눌러 확인하세요")
         embed = {
-            "title": "🪑 좌석 선점 완료 — 결제만 하면 됩니다!",
-            "color": _COLOR["seat_held"],
+            "title": title,
+            "color": _COLOR["seat_held"] if reached else 0xE67E22,
             "fields": [
                 {"name": "영화", "value": movie or "-", "inline": True},
                 {"name": "극장", "value": theater or "-", "inline": True},
                 {"name": "상영관", "value": screen or "-", "inline": True},
                 {"name": "날짜/시간", "value": f"{date} {showtime}".strip() or "-", "inline": True},
                 {"name": "좌석", "value": seat_info or "-", "inline": True},
+                {"name": "상태", "value": ("결제 페이지 도달 — 결제만 하세요" if reached
+                                          else "결제하기 미도달 — 창에서 직접 결제하기 클릭 필요"), "inline": False},
             ],
         }
         payload = self._payload_with_mention({"embeds": [embed]})

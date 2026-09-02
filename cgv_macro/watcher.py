@@ -134,7 +134,8 @@ class Watcher:
         # 감시(자리 확인)는 로그인 불필요(API). 창은 예매 페이지만 띄워두고 바로 감시 시작.
         # 로그인은 '좌석 잡을 때'만 필요하므로, 시작 시엔 로그인 확인/이동을 하지 않는다.
         try:
-            self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema", wait_until="domcontentloaded")
+            self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema",
+                                   wait_until="commit", timeout=20000)
         except Exception:  # noqa: BLE001
             pass
         log(f"[{tag}] 감시 시작 (로그인은 예매 시점에만 확인)")
@@ -188,21 +189,22 @@ class Watcher:
                 if ok:
                     self.held_payment = True
                     self.grabbed_keys.add(dup_key)
-                    log(f"[{tag}] ✅ 좌석 선점 완료: {seat} — {msg} (이 창은 결제용으로 유지)")
+                    reached = "결제 페이지" in (msg or "")
+                    log(f"[{tag}] ✅ 좌석 {'선점(결제페이지)' if reached else '선택(결제하기 미도달)'}: {seat} — {msg}")
                     shot = os.path.join(paths.data_dir(), f"grab_{_shot_prefix(tag)}payment.png")
                     if self.notifier:
                         try:
                             self.notifier.notify_held_image(
                                 movie=mov_nm, theater=site_nm, date=date_key, showtime=s.time,
                                 screen=f"{s.screen} ({s.fmt})", seat_info=seat,
-                                image_path=shot if os.path.exists(shot) else "")
+                                image_path=shot if os.path.exists(shot) else "", reached=reached)
                         except Exception:  # noqa: BLE001
                             pass
                     if self.on_success:
                         try:
                             self.on_success({"tag": tag, "movie": mov_nm, "theater": site_nm,
                                              "date": date_key, "time": s.time, "seat": seat,
-                                             "key": dup_key})
+                                             "key": dup_key, "reached": reached})
                         except Exception:  # noqa: BLE001
                             pass
                     break   # 이 창은 결제창으로 남기고 이 대상 감시 종료
@@ -223,10 +225,10 @@ class Watcher:
                     if "login" not in cur:   # 사용자가 로그인 중인 창은 이동시키지 않음
                         try:
                             self.grabber.page.goto("https://cgv.co.kr/cnm/movieBook/cinema",
-                                                   wait_until="domcontentloaded")
+                                                   wait_until="commit", timeout=20000)
                         except Exception:  # noqa: BLE001
                             pass
-                        log(f"[{tag}] 대기중(세션 유지)")
+                        log(f"[{tag}] 대기중 — 예매가능 회차 없음(감시 중)")
             # 주기에 지터를 섞어 여러 창이 동시에 요청하지 않게(차단 회피)
             self._sleep(interval + random.uniform(0, min(5.0, interval * 0.4)), stop_event)
         log(f"[{tag}] 종료")

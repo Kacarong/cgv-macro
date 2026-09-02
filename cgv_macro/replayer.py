@@ -451,8 +451,12 @@ class Grabber:
                                     break
                                 p.wait_for_timeout(120)
                         self._shot(p, "payment")
-                        logger.info("[replay] 결제 진행 결과: 결제수단페이지=%s", _pay_page())
-                        return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
+                        reached = _pay_page()
+                        logger.info("[replay] 결제 진행 결과: 결제수단페이지=%s", reached)
+                        if reached:
+                            return True, seat_str, "좌석 선점 완료(결제 페이지). 카드 결제만 직접 하세요."
+                        # 좌석은 선택됐지만 '결제하기'로 결제 페이지 진입 실패 → 창에서 직접 눌러야 함
+                        return True, seat_str, "좌석 선택됨 — '결제하기'가 안 눌려 결제페이지 미도달. 창에서 직접 결제하기를 눌러 확인하세요"
                     r = p.evaluate(CLICK_TEXT_JS, {"txt": txt, "cls": step.get("cls", "")})
                     logger.info("[replay] 클릭 '%s' → %s", txt[:14], r)
                 p.wait_for_timeout(450)
