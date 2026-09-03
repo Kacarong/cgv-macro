@@ -390,9 +390,16 @@ class Grabber:
                         .filter(e=>{const t=(e.textContent||'').replace(/[^0-9]/g,'');return t!==''&&parseInt(t,10)===target&&vis(e);});
                       if(!cands.length) return null;
                       cands.sort((a,b)=>(a.textContent||'').replace(/\s+/g,'').length-(b.textContent||'').replace(/\s+/g,'').length);
-                      // 클릭은 클릭 가능한 날짜 항목(조상)에. 가로 달력이므로 '가운데로 가로 스크롤'해서 화면에 들인다.
                       const item=cands[0].closest("[class*='dayScroll_scrollItem'],[class*='dayScroll_item'],li,button,a")||cands[0];
                       item.setAttribute('data-day','1');
+                      // 가로 스크롤 달력: 실제 가로 스크롤 컨테이너를 찾아 목표 날짜가 '가운데' 오도록 scrollLeft 조정
+                      let sc=item.parentElement;
+                      for(let i=0;i<8&&sc&&sc!==document.body;i++){
+                        if(sc.scrollWidth>sc.clientWidth+5){
+                          const ir=item.getBoundingClientRect(), sr=sc.getBoundingClientRect();
+                          sc.scrollLeft += (ir.left+ir.width/2)-(sr.left+sr.width/2);
+                          break;}
+                        sc=sc.parentElement;}
                       item.scrollIntoView({block:'nearest',inline:'center'});
                       return (cands[0].textContent||'').replace(/[^0-9]/g,'');
                     }"""
@@ -435,6 +442,7 @@ class Grabber:
 
                     if got:
                         sel = None
+                        p.wait_for_timeout(500)   # scrollLeft(가로 스크롤) 안정화 대기
                         for attempt in range(4):
                             _click_date()
                             p.wait_for_timeout(1100)
@@ -444,7 +452,8 @@ class Grabber:
                                 sel = None
                             if sel and str(int(sel)) == day_num:
                                 break
-                            p.evaluate(mark_date_js, day_num)   # 재표식 후 재시도
+                            p.evaluate(mark_date_js, day_num)   # 재표식 + 재스크롤
+                            p.wait_for_timeout(500)
                         if not (sel and str(int(sel)) == day_num):
                             try:
                                 dd = p.evaluate(r"""()=>{const out=[];const seen=new Set();
