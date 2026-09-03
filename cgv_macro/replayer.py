@@ -390,18 +390,14 @@ class Grabber:
                         .filter(e=>{const t=(e.textContent||'').replace(/[^0-9]/g,'');return t!==''&&parseInt(t,10)===target&&vis(e);});
                       if(!cands.length) return null;
                       cands.sort((a,b)=>(a.textContent||'').replace(/\s+/g,'').length-(b.textContent||'').replace(/\s+/g,'').length);
-                      const item=cands[0].closest("[class*='dayScroll_scrollItem'],[class*='dayScroll_item'],li,button,a")||cands[0];
+                      const num=cands[0];
+                      const item=num.closest("[class*='dayScroll_scrollItem'],[class*='dayScroll_item'],li,button,a")||num;
                       item.setAttribute('data-day','1');
-                      // 가로 스크롤 달력: 실제 가로 스크롤 컨테이너를 찾아 목표 날짜가 '가운데' 오도록 scrollLeft 조정
-                      let sc=item.parentElement;
-                      for(let i=0;i<8&&sc&&sc!==document.body;i++){
-                        if(sc.scrollWidth>sc.clientWidth+5){
-                          const ir=item.getBoundingClientRect(), sr=sc.getBoundingClientRect();
-                          sc.scrollLeft += (ir.left+ir.width/2)-(sr.left+sr.width/2);
-                          break;}
-                        sc=sc.parentElement;}
-                      item.scrollIntoView({block:'nearest',inline:'center'});
-                      return (cands[0].textContent||'').replace(/[^0-9]/g,'');
+                      // 화면 밖(가로 스크롤 밖)이어도 되도록 JS로 직접 클릭 — 스팬/항목 둘 다(핸들러 위치 무관).
+                      try{ item.scrollIntoView({block:'nearest',inline:'center'}); }catch(e){}
+                      try{ num.click(); }catch(e){}
+                      try{ item.click(); }catch(e){}
+                      return (num.textContent||'').replace(/[^0-9]/g,'');
                     }"""
                     verify_date_js = r"""()=>{
                       const all=[...document.querySelectorAll("[class*='dayScroll']")];
