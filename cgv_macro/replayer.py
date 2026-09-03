@@ -393,12 +393,9 @@ class Grabber:
                       const num=cands[0];
                       const item=num.closest("[class*='dayScroll_scrollItem'],[class*='dayScroll_item'],li,button,a")||num;
                       item.setAttribute('data-day','1');
-                      // 화면 밖(가로 스크롤 밖)이어도 되도록 실제 클릭 이벤트 시퀀스를 직접 발동(스팬+항목).
+                      num.setAttribute('data-daynum','1');
+                      // 표식+가로스크롤만. 실제 클릭은 Playwright 신뢰클릭 1회로만(중복클릭 방지).
                       try{ item.scrollIntoView({block:'nearest',inline:'center'}); }catch(e){}
-                      const fire=(el)=>{['pointerdown','mousedown','mouseup','click'].forEach(t=>{
-                        try{el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));}catch(e){}});
-                        try{el.click();}catch(e){}};
-                      fire(num); fire(item);
                       return (num.textContent||'').replace(/[^0-9]/g,'');
                     }"""
                     # 주의: 'c-red'는 '주말(일요일 빨강)' 색이라 선택 표시가 아님 → 제외.
