@@ -393,16 +393,19 @@ class Grabber:
                       const num=cands[0];
                       const item=num.closest("[class*='dayScroll_scrollItem'],[class*='dayScroll_item'],li,button,a")||num;
                       item.setAttribute('data-day','1');
-                      // 화면 밖(가로 스크롤 밖)이어도 되도록 JS로 직접 클릭 — 스팬/항목 둘 다(핸들러 위치 무관).
+                      // 화면 밖(가로 스크롤 밖)이어도 되도록 실제 클릭 이벤트 시퀀스를 직접 발동(스팬+항목).
                       try{ item.scrollIntoView({block:'nearest',inline:'center'}); }catch(e){}
-                      try{ num.click(); }catch(e){}
-                      try{ item.click(); }catch(e){}
+                      const fire=(el)=>{['pointerdown','mousedown','mouseup','click'].forEach(t=>{
+                        try{el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));}catch(e){}});
+                        try{el.click();}catch(e){}};
+                      fire(num); fire(item);
                       return (num.textContent||'').replace(/[^0-9]/g,'');
                     }"""
+                    # 주의: 'c-red'는 '주말(일요일 빨강)' 색이라 선택 표시가 아님 → 제외.
                     verify_date_js = r"""()=>{
-                      const all=[...document.querySelectorAll("[class*='dayScroll']")];
-                      const sel=all.find(e=>{const c=((e.className||'')+'');const t=(e.textContent||'').replace(/[^0-9]/g,'');
-                        return t!==''&&(c.includes('c-red')||c.includes('active')||c.includes('selected')||e.getAttribute('aria-selected')==='true');});
+                      const all=[...document.querySelectorAll("[class*='dayScroll_scrollItem'],[class*='dayScroll_item']")];
+                      const sel=all.find(e=>{const c=((e.className||'')+'').toLowerCase();const t=(e.textContent||'').replace(/[^0-9]/g,'');
+                        return t!==''&&(c.includes('active')||c.includes('selected')||c.includes('_on')||c.includes('_sel')||c.includes('checked')||e.getAttribute('aria-selected')==='true');});
                       return sel?(sel.textContent||'').replace(/[^0-9]/g,''):null;
                     }"""
                     # 달력이 아직 안 그려졌을 수 있으니 뜰 때까지 최대 ~8초 폴링
@@ -438,32 +441,26 @@ class Grabber:
 
                     if got:
                         sel = None
-                        p.wait_for_timeout(500)   # scrollLeft(가로 스크롤) 안정화 대기
+                        p.wait_for_timeout(500)   # 스크롤/렌더 안정화 대기
                         for attempt in range(4):
                             _click_date()
-                            p.wait_for_timeout(1100)
+                            p.wait_for_timeout(1000)
                             try:
                                 sel = p.evaluate(verify_date_js)
                             except Exception:  # noqa: BLE001
                                 sel = None
-                            if sel and str(int(sel)) == day_num:
+                            if sel is None:        # 선택 표시 감지 불가 → 클릭은 된 것으로 간주(재시도 안 함)
                                 break
-                            p.evaluate(mark_date_js, day_num)   # 재표식 + 재스크롤
+                            if str(int(sel)) == day_num:
+                                break
+                            p.evaluate(mark_date_js, day_num)   # 다른 날짜면 재클릭
                             p.wait_for_timeout(500)
-                        if not (sel and str(int(sel)) == day_num):
-                            try:
-                                dd = p.evaluate(r"""()=>{const out=[];const seen=new Set();
-                                  for(const e of document.querySelectorAll("[class*='dayScroll']")){
-                                    const t=(e.textContent||'').replace(/\s+/g,'').slice(0,4);
-                                    if(!/\d/.test(t)||seen.has(t))continue;seen.add(t);
-                                    const cs=((e.className||'')+'').split(' ').filter(c=>c.toLowerCase().includes('day')).join('.').slice(0,46);
-                                    out.push(t+'<'+e.tagName+'.'+cs+'>');if(out.length>=8)break;}
-                                  return out.join('  ');}""")
-                            except Exception:  # noqa: BLE001
-                                dd = ""
-                            _lg(f"⚠️ 날짜 {day_num}일 선택 실패(달력표시 {int(sel) if sel else '?'}일) — 구조: {dd[:260]}")
-                        else:
+                        if sel is None:
+                            _lg(f"날짜 {day_num}일 클릭 완료 (선택표시 확인 불가 — 실제 날짜는 창에서 확인)")
+                        elif str(int(sel)) == day_num:
                             _lg(f"날짜 {day_num}일 선택 (달력 표시: {int(sel)}일)")
+                        else:
+                            _lg(f"⚠️ 날짜 {day_num}일 클릭했는데 {int(sel)}일 선택됨 — 재확인 필요")
                     else:
                         _lg(f"날짜 {day_num}일 못 찾음(달력 로딩 지연?)")
                     p.wait_for_timeout(1300)

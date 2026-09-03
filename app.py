@@ -27,7 +27,7 @@ PANEL = "#1B1B1F"
 BG = "#0F0F10"
 SUB = "#9A9AA2"
 
-VERSION = "v89"
+VERSION = "v90"
 CONFIG = os.path.join(paths.data_dir(), "app_config.json")
 RECIPE = os.path.join(paths.data_dir(), "recipe.json")
 STATE_JSON = os.path.join(paths.data_dir(), "cgv_state.json")   # 로그인 세션(창 공유용)
