@@ -805,39 +805,80 @@ class Grabber:
                 out.append(lb)
         return out
 
-    def _click_seat_by_label(self, p, lb: str) -> bool:
-        """라벨이 정확히 lb인 빈 좌석을 JS로 즉시 찾아 '가로/세로 가운데로 스크롤'한 뒤 클릭.
-        (좌석 100개를 하나씩 확인하지 않아 빠르고, 화면 밖 좌석도 스크롤해서 확실히 누름)"""
+    @staticmethod
+    def _seat_is_selected(p, lb: str) -> bool:
+        """라벨 lb 좌석이 '선택됨' 상태로 실제 반영됐는지(클래스/aria) 확인.
+        좌석 자신 또는 가까운 조상(버튼/컨테이너)까지 훑는다."""
         try:
-            ok = p.evaluate(r"""(lb)=>{
+            return bool(p.evaluate(r"""(lb)=>{
+              const sel=e=>{const c=((e.className||'')+'').toLowerCase();
+                const ap=((e.getAttribute('aria-pressed')||e.getAttribute('aria-selected')
+                          ||e.getAttribute('aria-checked')||'')+'').toLowerCase();
+                return /select|active|choose|checked|picked/.test(c)||ap==='true';};
+              for(const e of document.querySelectorAll("[class*='seatNumber']")){
+                if((e.textContent||'').trim().toUpperCase()!==lb) continue;
+                let x=e; for(let k=0;k<4&&x;k++){if(sel(x))return true; x=x.parentElement;}}
+              return false;}""", lb))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _click_seat_by_label(self, p, lb: str) -> bool:
+        """라벨이 정확히 lb인 '실제 클릭 가능한' 빈 좌석을 클릭하고, 선택 상태가 진짜
+        반영됐는지 확인한다. 같은 라벨 후보가 여럿이면(예: 미니맵/전체지도 썸네일 + 실제 좌석)
+        큰 것(=실제 좌석)부터 시도하고, 클릭이 '선택'으로 반영된 후보를 채택한다.
+        (화면 밖 좌석은 가로/세로로 스크롤해서 확실히 누름)"""
+        # 이미 선택된 좌석이면 다시 누르면 '선택 해제'로 토글되므로 그대로 성공 처리.
+        if self._seat_is_selected(p, lb):
+            return True
+        try:
+            n = p.evaluate(r"""(lb)=>{
               document.querySelectorAll('[data-seatpick]').forEach(e=>e.removeAttribute('data-seatpick'));
               const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&e.offsetParent!==null;};
-              const els=[...document.querySelectorAll("[class*='seatNumber']")]
-                .filter(e=>(e.textContent||'').trim().toUpperCase()===lb&&vis(e));
-              if(!els.length) return 0;
-              const el=els[0];
-              const clk=el.closest("button,[role=button],a")||el.parentElement||el;
-              clk.setAttribute('data-seatpick','1');
-              clk.scrollIntoView({block:'center',inline:'center'});
-              return 1;}""", lb)
+              const dis=e=>{const c=((e.className||'')+'').toLowerCase();
+                return e.disabled||e.getAttribute('aria-disabled')==='true'
+                  ||/disable|reserv|sold|complete/.test(c);};
+              let els=[...document.querySelectorAll("[class*='seatNumber']")]
+                .filter(e=>(e.textContent||'').trim().toUpperCase()===lb&&vis(e))
+                // 좌석 자신/가까운 조상이 판매완료·비활성이면 제외.
+                .filter(e=>{let x=e; for(let k=0;k<4&&x;k++){if(dis(x))return false; x=x.parentElement;} return true;});
+              // 큰 요소(실제 좌석) 우선, 작은 것(미니맵 썸네일) 나중.
+              els.sort((a,b)=>{const ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();
+                return rb.width*rb.height-ra.width*ra.height;});
+              els.forEach((e,i)=>{const clk=e.closest("button,[role=button],a")||e.parentElement||e;
+                clk.setAttribute('data-seatpick',String(i));});
+              return els.length;}""", lb)
         except Exception:  # noqa: BLE001
-            ok = 0
-        if not ok:
+            n = 0
+        n = int(n or 0)
+        if not n:
             return False
-        p.wait_for_timeout(120)
-        loc = p.locator("[data-seatpick='1']").first
-        for how in ("normal", "force", "js"):
+        clicked_any = False
+        for i in range(n):
+            loc = p.locator(f"[data-seatpick='{i}']").first
             try:
-                if how == "normal":
-                    loc.click(timeout=3500)
-                elif how == "force":
-                    loc.click(force=True, timeout=2500)
-                else:
-                    loc.evaluate("e=>e.click()")
-                return True
+                loc.scroll_into_view_if_needed(timeout=1500)
             except Exception:  # noqa: BLE001
-                continue
-        return False
+                pass
+            p.wait_for_timeout(120)
+            for how in ("normal", "force", "js"):
+                try:
+                    if how == "normal":
+                        loc.click(timeout=2500)
+                    elif how == "force":
+                        loc.click(force=True, timeout=1800)
+                    else:
+                        loc.evaluate("e=>e.click()")
+                    clicked_any = True
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+            p.wait_for_timeout(180)
+            # 클릭이 '선택'으로 실제 반영된 후보를 채택. 안 되면 다음 후보(예: 실제 좌석) 시도.
+            if self._seat_is_selected(p, lb):
+                return True
+        # 어느 후보도 '선택' 신호를 못 줬지만 클릭은 됐을 수 있음(이 관이 선택표시 클래스를
+        # 안 쓰는 경우) → 전역 '선택완료' 버튼 판정이 최종 결정하도록 클릭 성공 여부로 반환.
+        return clicked_any
 
     def _pick_seats(self, page, total: int, prefer: str, preferred: list[str],
                     only_preferred: bool, region: dict | None = None) -> tuple[bool, str, str]:
@@ -925,7 +966,11 @@ class Grabber:
                     const t=(e.textContent||'').trim();
                     if(!/^[A-Z]{1,2}\d{1,3}$/.test(t)||seen.has(t))continue;seen.add(t);
                     const cs=((e.className||'')+'').split(' ').filter(c=>c.toLowerCase().includes('seat')).join('.').slice(0,44);
-                    out.push(t+'<'+e.tagName+'.'+cs+(e.disabled?':dis':'')+'>');
+                    const r=e.getBoundingClientRect();
+                    const dup=[...document.querySelectorAll("[class*='seatNumber']")]
+                      .filter(x=>(x.textContent||'').trim().toUpperCase()===t.toUpperCase()).length;
+                    out.push(t+'<'+e.tagName+'.'+cs+(e.disabled?':dis':'')
+                      +' '+Math.round(r.width)+'x'+Math.round(r.height)+(dup>1?' x'+dup:'')+'>');
                     if(out.length>=10)break;}
                   return out.join('  ');}""")
             except Exception:  # noqa: BLE001
