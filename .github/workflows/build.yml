@@ -35,11 +35,16 @@ jobs:
           --hidden-import cgv_macro.relogin
           app.py
 
-      - name: Upload artifact
+      # 태그 빌드는 Release 에 exe 가 붙으므로 artifact 업로드는 중복이다.
+      # 매 릴리스마다 50MB 씩 쌓여 artifact 저장 용량(quota)을 터뜨렸고, 그 실패가
+      # 곧바로 Release 단계를 스킵시켜 배포가 안 됐다. 태그 빌드에선 올리지 않는다.
+      - name: Upload artifact (non-tag builds only)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
           name: CGV-Seat-Watcher
           path: dist/CGV-Seat-Watcher.exe
+          retention-days: 7
 
       - name: Publish to Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
